@@ -5,77 +5,127 @@
 # a ML model.
 
 from copy import deepcopy
-from typing import Optional
 
+import numpy as np
 import pandas as pd
-from prettytable import PrettyTable
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import (
+    FunctionTransformer,
+    MinMaxScaler,
+    OneHotEncoder,
+    RobustScaler,
+    StandardScaler,
+)
 
 from utils.helpers import (
+    arcsinh_transform,
     categorical_and_numerical_columns,
+    describe_cols,
     filter_values,
     handle_categorical_cols,
-    stats_per_column,
-    tab_prettytable,
+    log_transform,
 )
 from utils.logger import logger
 
 
-class DataPreprocessor:
+class Dataset(pd.DataFrame):
+    """A class to represent the dataset to be used for ML models. Inherits from `pd.DataFrame`."""
+
+    _metadata = [
+        "categorical_columns",
+        "numerical_columns",
+        "scaler",
+        "categorical_encoder",
+        "already_encoded",
+    ]
+
     def __init__(
         self,
         data: pd.DataFrame | str = None,
-        inherit_attrs_from: Optional["DataPreprocessor"] = None,
+        scaler: StandardScaler = None,
+        categorical_encoder: OneHotEncoder = None,
+        *args,
+        **kwargs,
     ):
-        self.orig_df = pd.read_csv(data) if isinstance(data, str) else deepcopy(data)
+        """Initialize the `Dataset` object.
 
-        # Variables that will be set during the run() method
-        self.result_df = None
-        self.categorical_columns = None
-        self.numerical_columns = None
-        self.scaler = None
+        Parameters
+        ----------
+        data : pd.DataFrame | str, optional
+            The dataset to save. If `str` is passed, `pd.read_csv(data)` is called, by default None
+        scaler : StandardScaler, optional
+            The scaler to use for scaling the numerical columns. This is useful when we want to use
+            the same scaler for training and testing data, by default None
+        categorical_encoder : OneHotEncoder, optional
+            The encoder to use for encoding the categorical columns. This is useful when we want to
+            use the same encoder for training and testing data, by default None
+        """
+        if isinstance(data, str):
+            df = pd.read_csv(data)
+        else:
+            df = deepcopy(data) if data is not None else pd.DataFrame()
 
-        # Inherit attributes if provided
-        if inherit_attrs_from:
-            self.scaler = inherit_attrs_from.scaler
-            self.categorical_columns = inherit_attrs_from.categorical_columns
-            self.numerical_columns = inherit_attrs_from.numerical_columns
+        super().__init__(df, *args, **kwargs)
 
-    def __setup_result_df(self):
-        self.result_df = deepcopy(self.orig_df)
-        if self.categorical_columns is None or self.numerical_columns is None:
-            self.categorical_columns, self.numerical_columns = categorical_and_numerical_columns(
-                self.result_df
+        self.categorical_columns, self.numerical_columns = categorical_and_numerical_columns(self)
+        self.categorical_encoder = categorical_encoder
+        self.already_encoded = False
+        self.scaler = scaler
+
+    def get_X_y(
+        self, target: str | None, drop: list[str] = [], drop_inplace=False, as_numpy=True
+    ) -> tuple[pd.DataFrame, pd.Series] | tuple[np.ndarray, np.ndarray]:
+        """Get the feature matrix X and target vector y for a ML task.
+
+        Parameters
+        ----------
+        target : str or None
+            The target column to predict in a regression or classification. If `None`, all columns
+            correspond to `X`, while `y` will be `None`.
+        drop : list[str], optional
+            List of columns to drop from the dataset before returning `X`, `y`, by default []
+        drop_inplace : bool, optional
+            Whether to drop the columns specified in `drop` inplace or not. Useful when the dataframe
+            is intended to be used later on (in which case `drop_inplace` should be `False`), by
+            default False
+        as_numpy : bool, optional
+            Whether to return the data as numpy arrays or not, by default True
+
+        Returns
+        -------
+        tuple[pd.DataFrame, pd.Series] or tuple[np.ndarray, np.ndarray]
+            The feature matrix `X` and target vector `y`.
+        """
+        assert (
+            target in self.columns or target is None
+        ), f"Target '{target}' not found in the dataset columns."
+        y = self[target] if target is not None else None
+
+        # Only drop columns that exist in self
+        drop, non_existing_cols = filter_values(
+            drop, self.columns, operator="in", return_missing=True
+        )
+        drop = [target] + drop if target is not None else drop
+        if non_existing_cols:
+            logger.warning(
+                f"Columns {non_existing_cols} not found in the dataset. Not dropping them."
             )
 
-    def run(
-        self, on: pd.DataFrame | str = None, target: str | None = None, fill_missing="mean", axis=0
-    ) -> pd.DataFrame:
-        if on is not None:
-            self.orig_df = pd.read_csv(on) if isinstance(on, str) else deepcopy(on)
-            assert self.scaler is not None, (
-                "The `on` parameter was provided, but the run() method has not been called to "
-                "setup the scaler."
-            )
+        if drop_inplace:
+            self.drop(columns=drop, inplace=True)
+            X = self
+        else:
+            X = self.drop(columns=drop)
 
-        self.__setup_result_df()
-        self.fill_missing_values(method=fill_missing, axis=axis)
-        self.encode_categorical()
-        self.feature_engineering()
-        self.scale_numerical(omit_cols=[target] if target else [])
-        return self.result_df
+        if as_numpy:
+            return X.values, y.values if y is not None else y
 
-    def get_regression_X_y(
-        self, target: str, drop: list[str] = []
-    ) -> tuple[pd.DataFrame, pd.Series]:
-        assert self.result_df is not None, "Preprocess the data first using the run() method."
-        assert target in self.result_df.columns, f"Target '{target}' not found in the dataset cols."
-        y = self.result_df[target]
-        X = self.result_df.drop(columns=[target] + drop)
         return X, y
 
     def check_missing_values(self, print_=True, return_=False) -> bool:
-        missing_values = self.orig_df.isnull().sum()
+        """Check if there are any missing values in the dataset. If `print_` is `True`, it will print
+        the missing values in each column. If `return_` is `True`, it will return a boolean indicating
+        whether there are missing values or not."""
+        missing_values = self.isnull().sum()
         if missing_values.sum() > 0:
             if print_:
                 print("Missing values in each column:\n", missing_values[missing_values > 0])
@@ -87,104 +137,113 @@ class DataPreprocessor:
             if return_:
                 return False
 
-    def fill_missing_values(self, method="mean", axis=0):
+    def fill_missing_values(self, method="mean", axis=0) -> None:
+        """Fill missing values in the dataset using the specified `method`.
+
+        Parameters
+        ----------
+        method : str, optional
+            The method to use for filling missing values. Can be one of ["drop", "mean", "median",
+            "ffill", "bfill"], by default "mean"
+        axis : int, optional
+            The axis along which to fill the missing values, by default 0 (along columns)
+        """
         if not self.check_missing_values(print_=False, return_=True):
             return
         elif method == "drop":
-            self.result_df.dropna(axis=axis, inplace=True)
+            self.dropna(axis=axis, inplace=True)
         elif method == "mean":
-            self.result_df.fillna(self.mean(), inplace=True)
+            self.fillna(self.mean(), inplace=True)
         elif method == "median":
-            self.result_df.fillna(self.median(), inplace=True)
+            self.fillna(self.median(), inplace=True)
         elif method == "ffill":
-            self.result_df.ffill(axis=axis, inplace=True)
+            self.ffill(axis=axis, inplace=True)
         elif method == "bfill":
-            self.result_df.bfill(axis=axis, inplace=True)
+            self.bfill(axis=axis, inplace=True)
 
-    def encode_categorical(self):
-        # Encode categorical features using one-hot encoding
-        logger.info(
-            f"Encoding categorical columns {self.categorical_columns} using one-hot encoding."
-        )
-        self.result_df, _ = handle_categorical_cols(self.result_df, self.categorical_columns)
+    def encode_categorical(self, omit_cols=[]):
+        """Encode the categorical columns in the dataset using one-hot encoding. If `omit_cols` is
+        specified, those columns will be omitted from encoding (if they are indeed categorical)."""
+        if not self.already_encoded:
+            omit_cols, not_existing = filter_values(
+                omit_cols, self.columns, operator="in", return_missing=True
+            )
+            if not_existing:
+                logger.warn(f"Specified columns to omit {not_existing} not found in the dataset.")
+
+            cols_to_encode, omit_but_not_categorical = filter_values(
+                self.categorical_columns, omit_cols, operator="not_in", return_missing=True
+            )
+            if omit_but_not_categorical:
+                logger.warn(
+                    f"Specified columns to omit {omit_but_not_categorical} are not categorical."
+                )
+            logger.info(f"Encoding categorical columns {cols_to_encode} using one-hot encoding.")
+            self.categorical_encoder, encoded_df = handle_categorical_cols(
+                self, cols_to_encode, self.categorical_encoder, log=True
+            )
+            self.__init__(
+                pd.concat([self, encoded_df], axis=1),
+                categorical_encoder=self.categorical_encoder,
+                scaler=self.scaler,
+            )
+            self.already_encoded = True
+        else:
+            logger.warn("Categorical columns already encoded. Skipping encoding step.")
+            return
 
     def feature_engineering(self):
         # [ ] TODO: Implement feature engineering steps (p-value, t-test, etc.)
         pass
 
-    def scale_numerical(self, fit_transform=False, omit_cols=[]) -> None:
-        # Omit the columns specified in the `omit_cols` list from the entire list of numerical cols
-        cols_to_scale = filter_values(self.numerical_columns, omit_cols)
+    def scale_numerical(self, method="standard", fit_transform=False, omit_cols=[]) -> None:
+        """Scale the numerical columns in the dataset using the specified `method`.
 
-        # Make sure that the columns exist in the result DataFrame
+        Parameters
+        ----------
+        method : str, optional
+            The method to use for scaling the numerical columns. Can be one of ["standard", "minmax",
+            "robust", "log", "arcsinh"], by default "standard"
+        fit_transform : bool, optional
+            Whether to fit and transform the scaler or just transform the data, by default False
+        omit_cols : list, optional
+            The columns to omit from scaling, by default []
+        """
+        cols_to_scale = filter_values(self.numerical_columns, omit_cols, operator="not_in")
+
+        if method == "standard":
+            scaler = StandardScaler()
+        elif method == "minmax":
+            scaler = MinMaxScaler()
+        elif method == "robust":
+            scaler = RobustScaler()
+        elif method == "log":
+            scaler = FunctionTransformer(log_transform)
+        elif method == "arcsinh":
+            scaler = FunctionTransformer(arcsinh_transform)
+        else:
+            raise ValueError(f"Unknown scaling method: {method}")
+
         for col in cols_to_scale:
-            if col not in self.result_df.columns:
+            if col not in self.columns:
                 logger.warning(f"Column '{col}' not found in the dataset. Omitting scaling.")
                 cols_to_scale.remove(col)
 
-        if self.scaler is None or fit_transform:
-            logger.info(f"Fitting a new StandardScaler() using the dataset. Omitting {omit_cols}.")
-            self.scaler = StandardScaler()
-            self.result_df[cols_to_scale] = self.scaler.fit_transform(self.result_df[cols_to_scale])
+        if fit_transform or self.scaler is None:
+            logger.info(f"Fitting a new scaler ({scaler}) using the dataset. Omitting {omit_cols}.")
+            self.scaler = scaler
+            self[cols_to_scale] = self.scaler.fit_transform(self[cols_to_scale])
         else:
-            logger.info(f"Using the existing StandardScaler(). Omitting {omit_cols}.")
-            self.result_df[cols_to_scale] = self.scaler.transform(self.result_df[cols_to_scale])
+            logger.info(f"Using existing scaler ({self.scaler}). Omitting {omit_cols}.")
+            self[cols_to_scale] = self.scaler.transform(self[cols_to_scale])
 
-    def __describe_cols(
-        self, df: pd.DataFrame, categorical: bool, numerical: bool, is_result_df=False, tabs=1
-    ) -> str:
-        assert categorical or numerical, "At least one, categorical or numerical, must be True."
-        string = ""
-
-        # Detect categorical and numerical columns, only if it is not the result_df, as it has
-        # already been detected
-        if not is_result_df:
-            categorical_columns, numerical_columns = categorical_and_numerical_columns(df)
-        else:
-            categorical_columns, numerical_columns = (
-                self.categorical_columns,
-                self.numerical_columns,
-            )
-
-        # Create a PrettyTable to display the information
-        table = PrettyTable()
-        table.field_names = ["Column Name", "Unique Values"]
-
-        # Populate the table with categorical columns and their unique values
-        if categorical:
-            if is_result_df:
-                for col in [col for col in self.result_df.columns if col not in numerical_columns]:
-                    unique_vals = df[col].unique()
-                    table.add_row([col, unique_vals])
-            else:
-                for col in categorical_columns:
-                    unique_vals = df[col].unique()
-                    table.add_row([col, unique_vals])
-            # Print the table
-            string += "\t" * tabs + "Categorical Columns and Unique Values:\n"
-            string += tab_prettytable(table, tabs) + "\n"
-
-        # Populate the table with numerical columns and their statistics
-        if numerical:
-            table_stats = stats_per_column(df, numerical_columns)
-            string += "\t" * tabs + "Statistics for Numerical Columns:\n"
-            string += tab_prettytable(table_stats, tabs) + "\n"
-        return string
-
-    def describe(self, categorical=True, numerical=True, return_=False) -> str:
-        orig_df_desc = "Original Dataset:\n"
-        orig_df_desc += self.__describe_cols(self.orig_df, categorical, numerical)
-        if self.result_df is None:
-            result_df_desc = "Preprocessed Dataset: self.run() method has not been called yet."
-        else:
-            result_df_desc = "Preprocessed Dataset:\n"
-            result_df_desc += self.__describe_cols(
-                self.result_df, categorical, numerical, is_result_df=True
-            )
+    def describe(self, return_=False) -> str:
+        """Describes the dataset"""
+        desc = describe_cols(self)
         if return_:
-            return orig_df_desc + "\n" + result_df_desc
+            return desc
         else:
-            print(orig_df_desc + "\n" + result_df_desc)
+            print(desc)
 
     def __str__(self):
         return self.describe(return_=True)
