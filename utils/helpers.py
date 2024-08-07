@@ -3,12 +3,119 @@
 # File: utils/helpers.py
 # Description: This file defines helper functions that are used in the project.
 
+import itertools
+import math
+import pickle
+from contextlib import contextmanager
+from copy import deepcopy
+from os import makedirs as os_makedirs
+from os.path import basename as path_basename
+from os.path import exists as path_exists
+from os.path import isfile as path_isfile
+from os.path import join as path_join
+from os.path import splitext as path_splitext
+from pathlib import Path
+from typing import Any
+from warnings import warn
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from prettytable import PrettyTable
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import cross_val_score
 from sklearn.model_selection._search import BaseSearchCV
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from utils.config import CACHE_DIR, DPI
 from utils.logger import logger
+
+
+def expected_poly_number_features(n_features: int, degree: int, total_columns: int) -> int:
+    """Calculate the expected number of features after applying `PolynomialFeatures` to `n_features`
+    columns with a given `degree`. The total number of columns in the dataset is `total_columns`.
+    Bias term is included in the calculation.
+
+    Parameters
+    ----------
+    n_features : int
+        Number of features to which polynomial transformation is applied.
+    degree : int
+        The degree of the polynomial features.
+    total_columns : int
+        The total number of columns in the original dataset.
+
+    Returns
+    -------
+    int
+        The expected number of features after transformation.
+    """
+
+    def binomial_coefficient(n, k):
+        """Calculate the binomial coefficient C(n, k)."""
+        return math.factorial(n) // (math.factorial(k) * math.factorial(n - k))
+
+    if degree == 2:
+        return int((n_features + 2) * (n_features + 1) / 2) + (total_columns - n_features)
+    elif degree == 1:
+        return n_features + (total_columns - n_features) + 1  # Add 1 for the bias term
+
+    num_poly_features = sum(binomial_coefficient(n_features + i, i) for i in range(degree + 1))
+    remaining_features = total_columns - n_features
+    return num_poly_features + remaining_features
+
+
+def features_with_best_score_wrt_target(
+    df: pd.DataFrame, target_col: str, scoring="neg_root_mean_squared_error"
+) -> pd.Series:
+    """Calculate feature importance using cross-validation scores for linear regression.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input dataframe containing features and target variable.
+    target_col : str
+        The name of the target column in the dataframe.
+    scoring : str, optional
+        The scoring metric to use for cross-validation (default is 'neg_root_mean_squared_error').
+
+    Returns
+    -------
+    pandas.Series
+        A series containing feature names as index and their importance scores,
+        sorted in descending order of importance.
+
+    Examples
+    --------
+    Some available scoring metrics:
+    - 'neg_root_mean_squared_error'
+    - 'neg_mean_squared_error'
+    - 'neg_mean_absolute_error'
+    - 'r2'
+    - 'neg_mean_squared_log_error'
+
+    To get all available metrics in scikit-learn, run:
+
+    ```
+    >>> from sklearn.metrics import get_scorer_names
+    >>> print(get_scorer_names())
+    ```
+    """
+    assert target_col in df.columns, f"Target column '{target_col}' not found in the dataframe."
+
+    # Separate features and target
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    scaler = StandardScaler()
+    scores = {}
+    for feature in X.columns:
+        X_scaled = scaler.fit_transform(X[[feature]])
+        cv_scores = cross_val_score(LinearRegression(), X_scaled, y, cv=5, scoring=scoring)
+        # Store the mean absolute score (some metrics are negative)
+        scores[feature] = np.mean(cv_scores)
+
+    return pd.Series(scores).sort_values(ascending=False)
 
 
 def format_number(*values, decimals=3, precision=3):
@@ -31,6 +138,11 @@ def format_number(*values, decimals=3, precision=3):
         return format_single_value(values[0])
     else:
         return [format_single_value(v) for v in values]
+
+
+def round_values(*values: Any, decimals: int = 3) -> tuple:
+    """Return a tuple of the `values` rounded to `decimals` number of decimal places."""
+    return tuple(round(v, decimals) for v in values)
 
 
 def filter_values(
@@ -61,16 +173,56 @@ def filter_values(
         raise NotImplementedError(f"Operator '{operator}' not implemented.")
 
 
+def apply_mask_to_cv(cv: Any, X: np.ndarray, mask: np.ndarray, only_train=True) -> list[tuple]:
+    """Apply a mask to the given `cv` cross-validation generator. This effectively removes indices
+    from the training and validation sets (if `only_train==False`) based on the given `mask`.
+
+    Parameters
+    ----------
+    cv : Any | list[tuple]
+        The cross-validation generator to be used. This can also be a list of tuples containing
+        the training and validation indices directly.
+    X : np.ndarray
+        The feature matrix.
+    mask : np.ndarray
+        The boolean mask to be applied to the indices.
+    only_train : bool, optional
+        Whether to apply the mask only to the training set, by default True
+
+    Returns
+    -------
+    list[tuple]
+        A list of tuples containing the cleaned training and validation indices.
+    """
+    assert mask.shape[0] == X.shape[0], "Invalid mask shape. Must match the number of samples."
+    assert mask.dtype == bool, "Invalid mask type. Must be boolean."
+
+    if isinstance(cv, list) and len(cv) > 0 and isinstance(cv[0], tuple) and len(cv[0]) == 2:
+        folds = cv
+    else:
+        folds = cv.split(X)
+
+    preprocessed_folds = []
+    for train_index, val_index in folds:
+        clean_train_index = train_index[mask[train_index]]
+
+        if not only_train:
+            clean_val_index = val_index[mask[val_index]]
+            preprocessed_folds.append((clean_train_index, clean_val_index))
+        else:
+            preprocessed_folds.append((clean_train_index, val_index))
+
+    return preprocessed_folds
+
+
 def numerical_stats_per_column(
-    df: pd.DataFrame,
-    cols: list[str],
-    decimals=3,
-    precision=3,
+    df: pd.DataFrame, cols: list[str], decimals=3, precision=3, scalers={}
 ) -> PrettyTable:
     """Return statistics of the `df` for the specified `cols` in a `PrettyTable`. The numbers are
     formatted to `decimals` decimal places. Numbers less than `0.{precision}` are displayed as
     0.00...0 (e.g., 0.0001 is displayed as 0.000), by default 3. If set to 0, no precision is
-    applied."""
+    applied. If `scalers` are provided, the last column of the table is updated with the names of
+    the scalers used for the columns."""
     cols = filter_values(cols, set(cols) - set(df.columns))
     stats = df[cols].describe().transpose()
 
@@ -87,6 +239,9 @@ def numerical_stats_per_column(
         "Max",
     ]
 
+    if scalers:
+        table_stats.field_names.append("Scaler")
+
     # Populate the table with the statistics
     for col in cols:
         formatted_values = format_number(
@@ -100,7 +255,10 @@ def numerical_stats_per_column(
             decimals=decimals,
             precision=precision,
         )
-        table_stats.add_row([col, *formatted_values])
+        row = [col, *formatted_values]
+        if scalers:
+            row.append(scalers.get(col, ""))
+        table_stats.add_row(row)
 
     return table_stats
 
@@ -120,11 +278,27 @@ def categorical_stats_per_column(df: pd.DataFrame, cols: list[str]) -> PrettyTab
 
 
 def categorical_and_numerical_columns(
-    df: pd.DataFrame, dummy_is_categorical=True
+    df: pd.DataFrame, dummy_is_categorical=True, include_likely_categorical=True
 ) -> tuple[list[str], list[str]]:
-    """Return the list of categorical and numerical columns in the `df` (in that order). If
-    `dummy_is_categorical` is `True`, columns with dummy values produced by one-hot encoding with
-    `pd.get_dummies()` are considered categorical. If `False`, they are considered numerical."""
+    """Return the list of categorical and numerical columns in the `df` (in that order).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame to analyze.
+    dummy_is_categorical : bool, optional
+        If True, columns with dummy values produced by one-hot encoding with `pd.get_dummies()` are
+        considered categorical. If False, they are considered numerical, by default True.
+    include_likely_categorical : bool, optional
+        If True, likely categorical columns are included in the categorical columns, eventhough they
+        don't necessarily have object dtype. These are found by calling the helper function
+        `detect_likely_categorical_columns()`, by default True.
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        A tuple containing the list of categorical and numerical columns in the DataFrame.
+    """
     categorical_columns = list(df.select_dtypes(include=["object"]).columns)
     numerical_columns = list(df.select_dtypes(include=["int64", "float64"]).columns)
     binary_columns = []
@@ -156,11 +330,114 @@ def categorical_and_numerical_columns(
     else:
         numerical_columns.extend(binary_columns)
 
+    if include_likely_categorical:
+        likely_categorical = detect_likely_categorical_columns(df)
+        if likely_categorical:
+            logger.warning(
+                f"Likely categorical columns detected: {likely_categorical}. "
+                "These columns are not necessarily of object dtype."
+            )
+            categorical_columns.extend(likely_categorical)
+
+            # Remove the likely categorical columns from numerical columns
+            numerical_columns = filter_values(numerical_columns, likely_categorical)
+
+    # Remove duplicates
+    categorical_columns = list(set(categorical_columns))
+    numerical_columns = list(set(numerical_columns))
+
     assert len(categorical_columns) + len(numerical_columns) == len(df.columns), (
         "Number of categorical and numerical columns does not match the total number of columns "
         "in the dataset."
     )
+    assert set(categorical_columns).isdisjoint(
+        numerical_columns
+    ), "Categorical and numerical columns must be disjoint"
+    assert set(categorical_columns).union(set(numerical_columns)) == set(
+        df.columns
+    ), "Categorical and numerical columns must cover all columns in the dataset."
     return categorical_columns, numerical_columns
+
+
+def detect_likely_categorical_columns(
+    df: pd.DataFrame, max_unique_ratio=0.01, integer_only=True
+) -> list[str]:
+    """Detect columns in a DataFrame that are likely categorical based on the number of unique values
+    and their data type.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input DataFrame to analyze.
+    max_unique_ratio : float, optional
+        The maximum ratio of unique values to total rows to consider a column as categorical
+        (default is 0.01, i.e., 1%).
+    integer_only : bool, optional
+        If True, only consider columns with integer dtypes (default is True).
+
+    Returns
+    -------
+    list
+        A list of column names that are likely categorical based on the criteria.
+    """
+    likely_categorical = []
+    total_rows = len(df)
+
+    for column in df.columns:
+        # Check if the column should be considered based on its dtype
+        if integer_only and not pd.api.types.is_integer_dtype(df[column]):
+            continue
+
+        # Count unique values
+        unique_values = df[column].nunique()
+
+        # Calculate the ratio of unique values to total rows
+        unique_ratio = unique_values / total_rows
+
+        # Check if the column meets the criteria
+        if unique_ratio <= max_unique_ratio:
+            likely_categorical.append(column)
+
+    return likely_categorical
+
+
+def make_pretty_table(
+    data: list,
+    field_names: list[str] | None = None,
+    title: str = "",
+    alignments: list[str] | None = None,
+) -> PrettyTable:
+    """Create a `PrettyTable` from the `data` list with the specified `field_names` and `title`."""
+    table = PrettyTable()
+
+    if title:
+        table.title = title
+
+    # Determine the number of columns
+    num_columns = len(data[0]) if data else 0
+
+    # Set field names
+    if field_names:
+        table.field_names = field_names
+    else:
+        table.field_names = [f"Column {i+1}" for i in range(num_columns)]
+
+    # Set alignments
+    if alignments:
+        valid_alignments = {"l": "l", "r": "r", "c": "c"}
+        for i, align in enumerate(alignments):
+            if i < num_columns:
+                table.align[table.field_names[i]] = valid_alignments.get(align.lower(), "c")
+
+    # Set remaining columns to center alignment if alignments list is shorter than num_columns
+    for i in range(len(alignments) if alignments else 0, num_columns):
+        table.align[table.field_names[i]] = "c"
+
+    # Add rows
+    for row in data:
+        table.add_row(row)
+
+    return table
 
 
 def join_pretty_tables(
@@ -245,17 +522,20 @@ def rename_field_name(table: PrettyTable, old_field_name: str, new_field_name: s
         table.sortby = new_field_name
 
 
-def describe_cols(df: pd.DataFrame, separate=False, tabs=0) -> str:
+def describe_cols(df: pd.DataFrame, separate=False, tabs=0, scalers={}) -> str:
     """Return a string with the statistics of the `df` columns as a `PrettyTable()`. If `separate`
     is `True`, thestatistics are displayed separately for categorical and numerical columns. The
-    number of tabs at the beginning of each line is specified by `tabs`."""
+    number of tabs at the beginning of each line is specified by `tabs`. If `scalers` is provided,
+    the last column of the table is updated with the names of the scalers used for the columns."""
     string = ""
     categorical_columns, numerical_columns = categorical_and_numerical_columns(df)
 
     categorical_cols_stats = categorical_stats_per_column(
         df, categorical_columns
     )  # Categorical columns
-    numerical_cols_stats = numerical_stats_per_column(df, numerical_columns)  # Numerical columns
+    numerical_cols_stats = numerical_stats_per_column(
+        df, numerical_columns, scalers=scalers
+    )  # Numerical columns
     if separate:
         string += "\t" * tabs + "Categorical Columns and Unique Values:\n"
         string += tab_prettytable(categorical_cols_stats, tabs) + "\n"
@@ -276,21 +556,27 @@ def describe_cols(df: pd.DataFrame, separate=False, tabs=0) -> str:
 
 
 def handle_categorical_cols(
-    df: pd.DataFrame, cols: list[str], categorical_encoder: OneHotEncoder | None = None, log=False
+    df: pd.DataFrame,
+    cols: list[str],
+    categorical_encoder: OneHotEncoder | None = None,
+    log=False,
+    return_only_categorical=True,
 ) -> tuple[pd.DataFrame, OneHotEncoder]:
     """Return a `tuple` with the new DataFrame from `df` with the categorical columns in `cols`
     one-hot encoded, and the fitted `OneHotEncoder` object. The categorical columns are dropped from
-    the DataFrame. If `categorical_encoder` is provided, it is used to encode the columns, instead 
+    the DataFrame. If `categorical_encoder` is provided, it is used to encode the columns, instead
     of fitting a new encoder. If `log` is `True`, the function logs the encoding process."""
     # Assert that the provided encoder has been fitted (if provided)
     assert categorical_encoder is None or categorical_encoder.categories_ is not None, (
         "The provided categorical encoder has not been fitted. Please fit the encoder before "
         "passing it to the function."
-    ) 
+    )
     if not categorical_encoder:
         if log:
             logger.info(f"Fitting a new OneHotEncoder for categorical columns: {cols}")
-        categorical_encoder = OneHotEncoder(drop="first", handle_unknown="ignore", sparse_output=False)
+        categorical_encoder = OneHotEncoder(
+            drop="first", handle_unknown="ignore", sparse_output=False
+        )
         categorical_encoder.fit(df[cols])
     else:
         if log:
@@ -302,10 +588,15 @@ def handle_categorical_cols(
         columns=encoded_cols,
         index=df.index,
     )
+
     df.drop(columns=cols, inplace=True)
     df.reset_index(drop=True, inplace=True)
     encoded_df.reset_index(drop=True, inplace=True)
-    return categorical_encoder, encoded_df
+
+    if return_only_categorical:
+        return categorical_encoder, encoded_df
+    else:
+        return categorical_encoder, pd.concat([df, encoded_df], axis=1)
 
 
 def tab_prettytable(table: PrettyTable, tabs: int) -> str:
@@ -315,19 +606,6 @@ def tab_prettytable(table: PrettyTable, tabs: int) -> str:
     table_str = str(table)
     tabbed = tab_str + table_str.replace("\n", "\n" + tab_str)
     return tabbed
-
-
-def log_transform(x: np.ndarray) -> np.ndarray:
-    """Apply log transformation to the input `x` array. The transformation is `log(1 + x)` to handle
-    zero values."""
-    # Sum the minimum value (if negative) to all values before log-transforming to avoid log(-val)
-    x = np.where(x < 0, x + abs(x.min()), x)
-    return np.where(x == 0, 0, np.log1p(x))  # log(1 + x) to handle zero values
-
-
-def arcsinh_transform(x: np.ndarray) -> np.ndarray:
-    """Apply the inverse hyperbolic sine transformation to the input `x` array."""
-    return np.arcsinh(x)
 
 
 def parse_cv_results(grid_search: BaseSearchCV | dict, scoring_prefix="mean_", include_train=False):
@@ -370,3 +648,262 @@ def parse_cv_results(grid_search: BaseSearchCV | dict, scoring_prefix="mean_", i
             metrics[split] = curr_results
 
     return metrics
+
+
+def parsed_cv_results_to_df(parsed_cv_results: dict) -> pd.DataFrame:
+    """Convert the parsed cross-validation results from `parse_cv_results` to a DataFrame."""
+    if not parsed_cv_results:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(parsed_cv_results).T
+    multi_index = pd.MultiIndex.from_tuples(
+        [
+            (
+                col[11:] if col.startswith("orig_scale_") else col,
+                "original" if col.startswith("orig_scale_") else "scaled",
+            )
+            for col in df.columns
+        ],
+        names=["Metric", "Split/Scale"],
+    )
+    df.columns = multi_index
+    df = df.sort_index(axis=1, level=["Metric", "Split/Scale"], ascending=[True, False])
+    return df
+
+
+def scatter_plot(
+    X: np.ndarray,
+    indices: list[pd.Index] = [],
+    labels=None,
+    style="seaborn",
+    title="",
+    xlabel="x",
+    ylabel="y",
+    zlabel="z",
+    figsize=(6, 4),
+) -> None:
+    """Scatter plot for dimensionality reduced data.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        The dimensionality reduced data.
+    indices : list of pd.Index
+        A list of indices specifying different groups to plot. Useful to color different groups of
+        points differently, by default []
+    labels : list of str, optional
+        List of labels for each group, by default None
+    style : str, optional
+        The plot style to use, by default "seaborn"
+    title : str, optional
+        The title of the plot, by default ""
+    xlabel, ylabel, zlabel : str, optional
+        The labels for the x, y, and z axes, by default "x", "y", "z"
+    figsize : tuple, optional
+        The figure size, by default (6, 4)
+    """
+    if style is None:
+        style = "seaborn"
+
+    with plt.style.context(style):
+        fig = plt.figure(figsize=figsize, dpi=DPI)
+        num_axes = X.shape[1]
+
+        if num_axes not in [1, 2, 3]:
+            raise ValueError("X must have either 1, 2 or 3 columns for 1D, 2D or 3D plotting.")
+
+        if num_axes in [1, 2]:
+            ax = fig.add_subplot(111)
+        else:
+            ax = fig.add_subplot(111, projection="3d")
+
+        # If the indices are not provided, plot all the data points as a single group
+        if not indices:
+            indices = [pd.Index(range(X.shape[0]))]
+
+        for i, idx in enumerate(indices):
+            label = f"Group {i + 1}" if labels is None else labels[i]
+            if num_axes == 1:
+                ax.scatter(X[idx], np.zeros_like(X[idx]), label=label, alpha=0.6)
+            elif num_axes == 2:
+                ax.scatter(X[idx, 0], X[idx, 1], label=label, alpha=0.6)
+            else:
+                ax.scatter(X[idx, 0], X[idx, 1], X[idx, 2], label=label, alpha=0.6)
+
+        ax.set_xlabel(xlabel)
+        if num_axes > 1:
+            ax.set_ylabel(ylabel)
+        if num_axes == 3:
+            ax.set_zlabel(zlabel)
+        if title:
+            ax.set_title(title)
+
+        ax.legend()
+
+        if num_axes == 1:
+            ax.set_yticks([])
+        else:
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        if num_axes == 3:
+            ax.set_zticks([])
+            ax.set_box_aspect([1, 1, 1], zoom=0.8)
+
+        ax.set_aspect("auto")
+        plt.show()
+
+
+@contextmanager
+def safe_latex_context(df: pd.DataFrame) -> callable:
+    """A context manager to safely escape the column names in a DataFrame for LaTeX rendering in
+    matplotlib plots. It temporarily replaces underscores with LaTeX-friendly underscores in the
+    column names. The original column names are restored after the context is exited."""
+    underscore = "$\mathrm{\_}$"
+    original_columns = df.columns.copy()
+    escaped_columns = [col.replace("_", underscore) for col in df.columns]
+    column_map = dict(zip(original_columns, escaped_columns))
+
+    def safe_column_access(col):
+        return column_map.get(col, col.replace("_", underscore) if isinstance(col, str) else col)
+
+    original_xlabel = plt.xlabel
+    original_ylabel = plt.ylabel
+    original_suptitle = plt.suptitle
+
+    def safe_xlabel(*args, **kwargs):
+        args = tuple(safe_column_access(arg) for arg in args)
+        return original_xlabel(*args, **kwargs)
+
+    def safe_ylabel(*args, **kwargs):
+        args = tuple(safe_column_access(arg) for arg in args)
+        return original_ylabel(*args, **kwargs)
+
+    def safe_suptitle(*args, **kwargs):
+        args = tuple(safe_column_access(arg) for arg in args)
+        return original_suptitle(*args, **kwargs)
+
+    plt.xlabel = safe_xlabel
+    plt.ylabel = safe_ylabel
+    plt.suptitle = safe_suptitle
+
+    try:
+        yield safe_column_access
+    finally:
+        plt.xlabel = original_xlabel
+        plt.ylabel = original_ylabel
+        plt.suptitle = original_suptitle
+
+
+def is_potential_file_path(path: str) -> bool:
+    """Check if the given path is a potential file path by checking if the base name has a file."""
+    # Extract the base name of the path (the last part after the final slash)
+    base_name = path_basename(path)
+    # Check if the base name has a file extension typical for files
+    return path_splitext(base_name)[1] != ""
+
+
+def ensure_directory_exists(directory: str, warn_if_not=True) -> None:
+    """Ensure that a directory exists. If it doesn't, this function will create it. If the given
+    directory is a full path to a file, it will get the parent directory. If `warn_if_not` is `True`,
+    a warning will be shown if the directory does not exist."""
+    # Test if the given directory is a full path to a file, in which case, get the parent directory
+    if is_potential_file_path(directory):
+        directory = Path(directory).parent
+
+    if not path_exists(directory):
+        if warn_if_not:
+            warn(f"Directory {directory} does not exist. Creating it...")
+        os_makedirs(directory)
+
+
+def exists_in_folder(filename: str, folder: str) -> bool:
+    """Check if a `filename` exists in `folder`."""
+    fullpath = path_join(folder, filename)
+    return path_exists(fullpath)
+
+
+def in_cache(filename: str) -> bool:
+    """Check if a file exists in the cache directory, specified by the global variable `CACHE_DIR`."""
+    return exists_in_folder(filename, CACHE_DIR)
+
+
+def load_from_pickle(
+    filename: str,
+    folder: str,
+    trigger_warning: bool = False,
+    trigger_exception: bool = False,
+    verbose: bool = True,
+) -> Any:
+    """Load an object from a pickle file given the `filename`, inside the folder `folder`. If the
+    file does not exist,it will return `None`, and a warning or an exception can be triggered, if
+    specified."""
+    file_path = path_join(folder, filename)
+    if path_exists(file_path):
+        if verbose:
+            print(f"Loading {file_path} ... ", end="")
+        with open(file_path, "rb") as f:
+            loaded_object = pickle.load(f)
+        if verbose:
+            print("Done.")
+        return loaded_object
+    else:
+        if trigger_warning:
+            warn(f"{file_path} does not exist, returning None instead")
+        elif trigger_exception:
+            raise Exception(f"{file_path} does not exist")
+        return None
+
+
+def load_from_cache(filename: str, subfolder: str = None) -> Any:
+    """Load an object from a pickle file in cache directory, specified by the `Config.CACHE_DIR`.
+    Optionally, if a `subfolder` is specified, it will be loaded from `Config.CACHE_DIR/subfolder`.
+    """
+    return load_from_pickle(
+        filename, CACHE_DIR if not subfolder else path_join(CACHE_DIR, subfolder)
+    )
+
+
+def save_object_as_pickle(dst: str, name: str, obj: Any, overwrite: bool = True) -> None:
+    """Save an object as a pickle file.
+
+    Parameters
+    ----------
+    dst : str
+        The folder where the pickle file will be saved.
+    filename : str
+        The name of the pickle file.
+    obj : Any
+        The object to be saved as a pickle file.
+    overwrite : bool, optional
+        If True, the pickle file will be overwritten if it already exists.
+        Otherwise, it won't, by default True
+    """
+    ensure_directory_exists(dst)
+
+    pickle_file_path = path_join(dst, name)
+
+    # Check if the file already exists
+    if path_exists(pickle_file_path) and not overwrite:
+        warn(f"The file {pickle_file_path} already exists and it won't be overwritten.")
+        return
+
+    # Save the object as a pickle file
+    with open(pickle_file_path, "wb") as file:
+        pickle.dump(obj, file)
+
+
+def save_to_cache(file_: str, obj: Any, overwrite: bool = True, subfolder: str = None) -> None:
+    """Save an object as a pickle file in cache directory, specified by by the `Config.CACHE_DIR`.
+    Optionally, if a `subfolder` is specified, it will be saved in `Config.CACHE_DIR/subfolder`."""
+    save_object_as_pickle(
+        CACHE_DIR if not subfolder else path_join(CACHE_DIR, subfolder),
+        file_,
+        obj,
+        overwrite,
+    )
+
+
+def copy(data, deep=True) -> Any:
+    """Return a copy of the object."""
+    return deepcopy(data) if deep else copy(data)
