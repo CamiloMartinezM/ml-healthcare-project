@@ -153,7 +153,7 @@ def filter_values(
     Note: The `operator = "in"` does not preserve order.
 
     For example,
-    ```python
+    ```
     >>> filter_values([1, 2, 3, 4, 5], [2, 4], operator="not_in")
     [1, 3, 5]
     >>> filter_values([1, 2, 3, 4], [2, 4, 5], operator="in")
@@ -171,6 +171,25 @@ def filter_values(
         return [item for item in list_ if item not in values]
     else:
         raise NotImplementedError(f"Operator '{operator}' not implemented.")
+
+
+def remove_non_existent_columns(list: list, existing_columns: list) -> list:
+    """Remove columns from the `list` that do not exist in `existing_columns`."""
+    return [col for col in list if col in existing_columns]
+
+
+def get_column_indices(X: pd.DataFrame, column_names: list[str]) -> list[int]:
+    """Return the indices of the `column_names` in the feature matrix `X`."""
+    return [list(X.columns).index(col) for col in column_names if col in X.columns]
+
+
+def drop_existing_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Drop `columns` from the DataFrame `df`. If one or more columns do not exist in the DataFrame,
+    they are ignored and a warning is issued."""
+    missing_columns = filter_values(columns, df.columns, operator="not_in")
+    if missing_columns:
+        logger.warning(f"Columns {missing_columns} not found in the DataFrame. Ignoring them.")
+    return df.drop(columns=filter_values(df.columns, columns, operator="in"))
 
 
 def apply_mask_to_cv(cv: Any, X: np.ndarray, mask: np.ndarray, only_train=True) -> list[tuple]:
@@ -560,12 +579,15 @@ def handle_categorical_cols(
     cols: list[str],
     categorical_encoder: OneHotEncoder | None = None,
     log=False,
-    return_only_categorical=True,
+    return_only_encoded=True,
 ) -> tuple[pd.DataFrame, OneHotEncoder]:
     """Return a `tuple` with the new DataFrame from `df` with the categorical columns in `cols`
     one-hot encoded, and the fitted `OneHotEncoder` object. The categorical columns are dropped from
     the DataFrame. If `categorical_encoder` is provided, it is used to encode the columns, instead
-    of fitting a new encoder. If `log` is `True`, the function logs the encoding process."""
+    of fitting a new encoder. If `log` is `True`, the function logs the encoding process. If
+    `return_only_categorical` is `True`, only the categorical columns are returned, along with the
+    fitted encoder. Otherwise, returns the entire DataFrame concatenated with the encoded columns.
+    """
     # Assert that the provided encoder has been fitted (if provided)
     assert categorical_encoder is None or categorical_encoder.categories_ is not None, (
         "The provided categorical encoder has not been fitted. Please fit the encoder before "
@@ -582,21 +604,37 @@ def handle_categorical_cols(
         if log:
             logger.info(f"Using existing OneHotEncoder. Encoding categorical columns: {cols}")
 
+    encoded_df = encode_categorical_cols(
+        df, cols, categorical_encoder, return_only_encoded=return_only_encoded
+    )
+    return categorical_encoder, encoded_df
+
+
+def encode_categorical_cols(
+    df: pd.DataFrame,
+    cols: list[str],
+    categorical_encoder: OneHotEncoder,
+    return_only_encoded=True,
+) -> pd.DataFrame:
+    """Encode the categorical columns in `cols` of the DataFrame `df` using the provided
+    `categorical_encoder`."""
+    # Assert that the provided encoder has been fitted (if provided)
+    assert categorical_encoder is None or categorical_encoder.categories_ is not None, (
+        "The provided categorical encoder has not been fitted. Please fit the encoder before "
+        "passing it to the function."
+    )
     encoded_cols = categorical_encoder.get_feature_names_out(cols)
     encoded_df = pd.DataFrame(
-        categorical_encoder.transform(df[cols]),
-        columns=encoded_cols,
-        index=df.index,
+        categorical_encoder.transform(df[cols]), columns=encoded_cols, index=df.index
     )
-
-    df.drop(columns=cols, inplace=True)
-    df.reset_index(drop=True, inplace=True)
     encoded_df.reset_index(drop=True, inplace=True)
 
-    if return_only_categorical:
-        return categorical_encoder, encoded_df
+    if return_only_encoded:
+        return encoded_df
     else:
-        return categorical_encoder, pd.concat([df, encoded_df], axis=1)
+        df.drop(columns=cols, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return pd.concat([df, encoded_df], axis=1)
 
 
 def tab_prettytable(table: PrettyTable, tabs: int) -> str:
