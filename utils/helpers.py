@@ -297,7 +297,12 @@ def categorical_stats_per_column(df: pd.DataFrame, cols: list[str]) -> PrettyTab
 
 
 def categorical_and_numerical_columns(
-    df: pd.DataFrame, dummy_is_categorical=True, include_likely_categorical=True
+    df: pd.DataFrame,
+    dtypes={"categorical": ["object"], "numerical": ["int64", "float64"]},
+    dummy_is_categorical=True,
+    consecutive_sequences_are_categorical=True,
+    low_unique_int_values_are_categorical=True,
+    log=True,
 ) -> tuple[list[str], list[str]]:
     """Return the list of categorical and numerical columns in the `df` (in that order).
 
@@ -305,12 +310,20 @@ def categorical_and_numerical_columns(
     ----------
     df : pd.DataFrame
         The input DataFrame to analyze.
+    dtypes : dict, optional
+        A dictionary containing the data types for categorical and numerical columns. The keys are
+        'categorical' and 'numerical', and the values are lists of data types (default is 
+        `{'categorical': ['object'], 'numerical': ['int64', 'float64']})`.
     dummy_is_categorical : bool, optional
         If True, columns with dummy values produced by one-hot encoding with `pd.get_dummies()` are
         considered categorical. If False, they are considered numerical, by default True.
-    include_likely_categorical : bool, optional
+    consecutive_sequences_are_categorical : bool, optional
+        If True, columns with unique values forming a consecutive sequence starting from 0 or 1 are
+        considered categorical. If False, they are considered numerical, by default True.
+    low_unique_int_values_are_categorical : bool, optional
         If True, likely categorical columns are included in the categorical columns, eventhough they
-        don't necessarily have object dtype. These are found by calling the helper function
+        don't necessarily have object dtype. These are detected based on the number of unique values
+        and the ratio to the total number of rows. These are found by calling the helper function
         `detect_likely_categorical_columns()`, by default True.
 
     Returns
@@ -318,8 +331,8 @@ def categorical_and_numerical_columns(
     tuple[list[str], list[str]]
         A tuple containing the list of categorical and numerical columns in the DataFrame.
     """
-    categorical_columns = list(df.select_dtypes(include=["object"]).columns)
-    numerical_columns = list(df.select_dtypes(include=["int64", "float64"]).columns)
+    categorical_columns = list(df.select_dtypes(include=dtypes["categorical"]).columns)
+    numerical_columns = list(df.select_dtypes(include=dtypes["numerical"]).columns)
     binary_columns = []
 
     # Check for columns with unique values that are consecutive integers starting from 0 or 1
@@ -333,7 +346,8 @@ def categorical_and_numerical_columns(
             if col in numerical_columns:
                 numerical_columns.remove(col)
         elif (
-            len(unique_values) > 1
+            consecutive_sequences_are_categorical
+            and len(unique_values) > 1
             and unique_values[0] in [0, 1]
             and all(np.issubdtype(val, np.integer) for val in unique_values)
         ):
@@ -349,13 +363,14 @@ def categorical_and_numerical_columns(
     else:
         numerical_columns.extend(binary_columns)
 
-    if include_likely_categorical:
+    if low_unique_int_values_are_categorical:
         likely_categorical = detect_likely_categorical_columns(df)
         if likely_categorical:
-            logger.warning(
-                f"Likely categorical columns detected: {likely_categorical}. "
-                "These columns are not necessarily of object dtype."
-            )
+            if log:
+                logger.warning(
+                    f"Likely categorical columns detected: {likely_categorical}. "
+                    "These columns are not necessarily of object dtype."
+                )
             categorical_columns.extend(likely_categorical)
 
             # Remove the likely categorical columns from numerical columns
@@ -379,7 +394,7 @@ def categorical_and_numerical_columns(
 
 
 def detect_likely_categorical_columns(
-    df: pd.DataFrame, max_unique_ratio=0.01, integer_only=True
+    df: pd.DataFrame, max_unique_ratio=0.001, integer_only=True
 ) -> list[str]:
     """Detect columns in a DataFrame that are likely categorical based on the number of unique values
     and their data type.
@@ -390,7 +405,7 @@ def detect_likely_categorical_columns(
         The input DataFrame to analyze.
     max_unique_ratio : float, optional
         The maximum ratio of unique values to total rows to consider a column as categorical
-        (default is 0.01, i.e., 1%).
+        (default is 0.001, i.e., 0.1%).
     integer_only : bool, optional
         If True, only consider columns with integer dtypes (default is True).
 
@@ -541,13 +556,14 @@ def rename_field_name(table: PrettyTable, old_field_name: str, new_field_name: s
         table.sortby = new_field_name
 
 
-def describe_cols(df: pd.DataFrame, separate=False, tabs=0, scalers={}) -> str:
+def describe_cols(df: pd.DataFrame, separate=False, tabs=0, scalers={}, log=False, **kwargs) -> str:
     """Return a string with the statistics of the `df` columns as a `PrettyTable()`. If `separate`
     is `True`, thestatistics are displayed separately for categorical and numerical columns. The
     number of tabs at the beginning of each line is specified by `tabs`. If `scalers` is provided,
-    the last column of the table is updated with the names of the scalers used for the columns."""
+    the last column of the table is updated with the names of the scalers used for the columns. The
+    `kwargs` are passed to the `categorical_and_numerical_columns()` function."""
     string = ""
-    categorical_columns, numerical_columns = categorical_and_numerical_columns(df)
+    categorical_columns, numerical_columns = categorical_and_numerical_columns(df, log=log, **kwargs)
 
     categorical_cols_stats = categorical_stats_per_column(
         df, categorical_columns

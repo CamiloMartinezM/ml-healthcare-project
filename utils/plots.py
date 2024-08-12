@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from utils.config import DPI
 from utils.helpers import categorical_and_numerical_columns, safe_latex_context
 
 
@@ -66,7 +67,7 @@ def plot_features_vs_target(
         n_rows = math.ceil(n_features / n_cols)
 
     with plt.style.context(style), safe_latex_context(df) as safe:
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=DPI)
         if n_rows == 1 and n_cols == 1:
             axes = np.array([[axes]])
         elif n_rows == 1 or n_cols == 1:

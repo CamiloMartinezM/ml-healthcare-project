@@ -85,11 +85,5 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 warnings_simplefilter("ignore", RuntimeWarning)
 
 # DPI for plots (change when final plotting)
-DPI = 80
+DPI = 200
 plt.rcParams["figure.dpi"] = DPI
-
-def set_dpi(dpi: int) -> None:
-    """Set the DPI for plots."""
-    global DPI
-    DPI = dpi
-    plt.rcParams["figure.dpi"] = DPI

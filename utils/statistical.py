@@ -15,6 +15,7 @@ from scipy.stats import iqr, pearsonr, zscore
 from sklearn.ensemble import IsolationForest
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
+from utils.config import DPI
 from utils.helpers import safe_latex_context
 from utils.metrics import mse
 
@@ -67,9 +68,12 @@ def correlated_columns(
 def plot_distribution_fits(
     data: pd.DataFrame,
     column: str,
-    distributions=["norm", "gamma", "lognorm"],
+    distribution: str | None = "norm",
     apply_transform: Callable | None = None,
-    figsize=(8, 3),
+    show_original_histogram: bool = False,
+    stat="density",
+    figsize=None,
+    titles: list[str] | None = None,
     style="default",
 ) -> None:
     """
@@ -81,60 +85,102 @@ def plot_distribution_fits(
         pandas DataFrame containing the data.
     column : str
         The column in the DataFrame to plot.
-    distributions : list, default=['norm', 'gamma', 'lognorm']
-        List of distribution names to fit and plot.
-    apply_transform : Callable, optional
-        A transformation function to apply to the data before fitting the distributions.
+    distribution : str | None, default="norm"
+        Distribution name to fit and plot, e.g, "norm", "gamma", "lognorm". If None, it won't fit
+        any distribution.
+    apply_transform : Callable | TransformerMixin, default=None
+        A transformation function to apply to the data before fitting the distributions. It can
+        also be a sklearn transformer with a fit_transform method.
+    show_original_histogram : bool, default=False
+        Whether to show the original data histogram.
+    stat : str, default="density"
+        The type of histogram to plot. This is passed to `seaborn.histplot`, possible values are
+        "count", "frequency", "density", "probability".
+    figsize : tuple, default=(12, 4)
+        The figure size.
+    titles : list[str] | None, default=None
+        The list of titles for the subplots. If None, the titles are generated automatically.
+        It should have 3 elements: `[original_histogram, fitted_distribution, qq_plot]`, but can be
+        less if some plots are not shown.
+    style : str, default="default"
+        The matplotlib style to use.
     """
-    n_distributions = len(distributions)
-    n_rows = n_distributions
-    n_cols = 2
+    n_rows = 1
+
+    if distribution is None:
+        show_original_histogram = True
+
+    n_cols = int(distribution is not None) + int(show_original_histogram) + 1
+
+    # Default figsizes based on the number of columns
+    if figsize is None and n_cols == 3:
+        figsize = (8, 2)
+    elif figsize is None and n_cols == 2:
+        figsize = (6, 2)
 
     if not style:
         style = "default"
 
-    y = data[column]
-    if apply_transform:
-        y = apply_transform(y)
-
     with plt.style.context(style), safe_latex_context(data) as safe:
-        # Adjust figure height based on number of distributions
-        fig_height = figsize[1] * n_rows
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize[0], fig_height))
+        y = data[column]
+        if apply_transform:
+            # Check if the transformation function is an instance and has a fit_transform method
+            if hasattr(apply_transform, "fit_transform"):
+                y_transformed = apply_transform.fit_transform(y.to_frame()).squeeze()
+            else:
+                y_transformed = apply_transform(y)
+        else:
+            y_transformed = y
 
-        for i, dist_name in enumerate(distributions):
-            # Get the distribution object and fit parameters
-            dist = getattr(stats, dist_name)
-            params = dist.fit(y)
+        # Adjust figure size based on the number of distributions
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=DPI)
+
+        # Original data histogram
+        if show_original_histogram:
+            ax0 = axes[0]
+            sns.histplot(y, stat=stat, kde=True, ax=ax0)
+            ax0.set_title(titles[0] if titles and titles[0] else f"Original - Histogram")
+            ax0.set_xlabel(safe(column))
+            col_start = 1
+        else:
+            col_start = 0
+
+        # Get the distribution object and fit parameters
+        if distribution is not None:
+            dist = getattr(stats, distribution)
+            params = dist.fit(y_transformed)
 
             # Histogram and fitted distribution plot
-            ax_hist = axes[i, 0] if n_rows > 1 else axes[0]
-            sns.histplot(y, stat="density", kde=True, ax=ax_hist)
-            x_range = np.linspace(y.min(), y.max(), 1000)
+            ax_hist = axes[col_start]
+            sns.histplot(y_transformed, stat=stat, kde=True, ax=ax_hist)
+            x_range = np.linspace(y_transformed.min(), y_transformed.max(), 1000)
             ax_hist.plot(
                 x_range,
                 dist.pdf(x_range, *params),
                 "r-",
                 lw=2,
-                label=f"Fitted {dist_name.capitalize()}",
+                label=f"Fitted {distribution.capitalize()}",
             )
-            title = f"{dist_name.capitalize()} Fit"
+            title = f"{distribution.capitalize()} Fit"
             if apply_transform:
-                title += f" ({apply_transform.__name__.replace('_', ' ')})"
+                title += f" ({apply_transform.__class__.__name__.replace('_', ' ')})"
             title += " - Histogram"
             ax_hist.set_title(title)
             ax_hist.set_xlabel(safe(column))
             ax_hist.legend()
+            col_start += 1
+        else:
+            dist = "norm"
+            params = ()
 
-            # Q-Q plot
-            ax_qq = axes[i, 1] if n_rows > 1 else axes[1]
-            stats.probplot(y, dist=dist, sparams=params, plot=ax_qq)
-            ax_qq.set_title(f"{dist_name.capitalize()} - Q-Q Plot")
+        # Q-Q plot
+        ax_qq = axes[col_start]
+        stats.probplot(y_transformed, dist=dist, sparams=params, plot=ax_qq)
+        ax_qq.set_title(f"{distribution.capitalize()} - Q-Q Plot" if distribution else "Q-Q Plot")
 
         fig.tight_layout()
-
-    plt.show()
-    plt.close()
+        plt.show()
+        plt.close()
 
 
 def backward_elimination_t_test(
