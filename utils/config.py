@@ -30,7 +30,7 @@ if SCIENCEPLOTS_INSTALLED:
     import scienceplots
 
     PAPER_STYLE = ["science", "ieee"]
-    PAPER_STYLE += ["no-latex"]  # if not LATEX_INSTALLED else []
+    PAPER_STYLE += ["no-latex"] # if not LATEX_INSTALLED else []
     NOTEBOOK_STYLE = ["notebook"]
 else:
     warn(

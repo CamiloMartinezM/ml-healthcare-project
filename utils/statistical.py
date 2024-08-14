@@ -75,6 +75,7 @@ def plot_distribution_fits(
     figsize=None,
     titles: list[str] | None = None,
     style="default",
+    summary=True,
 ) -> None:
     """
     Plot histograms, fitted distributions, and Q-Q plots for various distribution types.
@@ -104,6 +105,8 @@ def plot_distribution_fits(
         less if some plots are not shown.
     style : str, default="default"
         The matplotlib style to use.
+    summary : bool, default=True
+        Whether to print the summary of the fitted distribution.
     """
     n_rows = 1
 
@@ -121,7 +124,7 @@ def plot_distribution_fits(
     if not style:
         style = "default"
 
-    with plt.style.context(style), safe_latex_context(data) as safe:
+    with plt.style.context(style), safe_latex_context() as safe:
         y = data[column]
         if apply_transform:
             # Check if the transformation function is an instance and has a fit_transform method
@@ -181,6 +184,18 @@ def plot_distribution_fits(
         fig.tight_layout()
         plt.show()
         plt.close()
+
+    if summary:
+        if distribution is not None:
+            print(f"Fitted {distribution.capitalize()} distribution parameters: {params}")
+
+        for name, curr_y in zip(["Original data", "Transformed data"], [y, y_transformed]):
+            print(f"{name} summary:")
+            print(f"\tMinimum: {curr_y.min():.4f}")
+            print(f"\tMaximum: {curr_y.max():.4f}")
+            print(f"\tMean: {curr_y.mean():.4f}")
+            print(f"\tStandard Deviation: {curr_y.std():.4f}")
+            print(f"\tNumber of Zeros: {(curr_y == 0.0).sum()}")
 
 
 def backward_elimination_t_test(

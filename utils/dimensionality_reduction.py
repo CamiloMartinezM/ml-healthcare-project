@@ -7,10 +7,10 @@ from gc import collect as collect_garbage
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, FastICA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, StandardScaler
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import LabelEncoder, Normalizer
+from sklearn.preprocessing import LabelEncoder
 
 from utils.config import CUPY_INSTALLED, OPENTSNE_INSTALLED, TSNE_CUDA_INSTALLED
 
@@ -84,7 +84,7 @@ def apply_tsne(
     collect_garbage()  # Collect garbage
 
     if use_tsnecuda and TSNE_CUDA_INSTALLED:
-        print("tsnecuda... ", end="")
+        print("tsnecuda")
         tsne_embedded = TSNE_CUDA(
             n_components=n_components,
             perplexity=perplexity,
@@ -92,7 +92,7 @@ def apply_tsne(
             random_seed=random_state,
         ).fit_transform(X)
     else:
-        print("opentsne... ", end="")
+        print("opentsne")
         tsne_embedded = TSNE(
             n_components=n_components,
             n_jobs=32,
@@ -123,7 +123,7 @@ def apply_lda(
     n_components : int, optional
         Number of components to keep. Default is 2.
     standardize_first : bool, optional
-        Whether to normalize the data before applying LDA. Default is True.
+        Whether to standardize the data before applying LDA. Default is True.
 
     Returns:
     --------
@@ -147,3 +147,23 @@ def apply_lda(
         pipeline = make_pipeline(StandardScaler(), pipeline)
 
     return pipeline.fit_transform(X, y)
+
+
+def apply_ica(
+    X: np.ndarray | pd.DataFrame,
+    n_components: int = 2,
+    random_state: int = 42,
+    standardize_first=True,
+) -> np.ndarray:
+    """Apply ICA to reduce the dimensionality of the given high-dimensional array."""
+
+    if isinstance(X, pd.DataFrame):
+        X = X.to_numpy()
+    
+    if standardize_first:
+        pipeline = make_pipeline(
+            StandardScaler(), FastICA(n_components=n_components, random_state=random_state)
+        )
+    else:
+        pipeline = FastICA(n_components=n_components, random_state=random_state)
+    return pipeline.fit_transform(X)

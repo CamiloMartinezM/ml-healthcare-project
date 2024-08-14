@@ -163,6 +163,55 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
                 "degree": Integer(2, 3),
             },
         },
+        "LinearSVR": {
+            "grid": {
+                "C": [0.1, 1, 10, 100],
+                # "intercept_scaling": [1, 10],
+                # "epsilon": [0.0, 0.25, 0.5],
+                "loss": ["epsilon_insensitive", "squared_epsilon_insensitive"],
+                "fit_intercept": [True],
+                "max_iter": [5000],
+            },
+            "bayes": {
+                "C": Real(0.1, 100, prior="log-uniform"),
+                # "intercept_scaling": Integer(1, 10),
+                # "epsilon": Real(0.0, 1.0, prior="uniform"),
+                "loss": Categorical(["epsilon_insensitive", "squared_epsilon_insensitive"]),
+                "fit_intercept": Categorical([True]),
+                "max_iter": 5000,
+            },
+        },
+        "SVC": {
+            "grid": {
+                "C": [0.1, 1, 10, 100],
+                "kernel": ["linear", "rbf", "poly"],
+                "gamma": [0.1, 1, "scale", "auto"],
+            },
+            "bayes": {
+                "C": Real(0.1, 10, prior="log-uniform"),
+                "gamma": Real(0.01, 0.1, prior="log-uniform"),
+                "kernel": Categorical(["linear", "rbf", "poly"]),
+                "degree": Integer(2, 3),
+            },
+        },
+        "LinearSVC": {
+            "grid": {
+                "C": [0.1, 1, 10, 100],
+                "penalty": ["l1", "l2"],
+                "loss": ["hinge", "squared_hinge"],
+                "class_weight": ["balanced", None],
+                "fit_intercept": [True],
+                "max_iter": [5000],
+            },
+            "bayes": {
+                "C": Real(0.1, 100, prior="log-uniform"),
+                "penalty": Categorical(["l1", "l2"]),
+                "loss": Categorical(["hinge", "squared_hinge"]),
+                "class_weight": Categorical(["balanced", None]),
+                "fit_intercept": Categorical([True]),
+                "max_iter": 5000,
+            },
+        },
         "LogisticRegression": {
             "grid": {
                 "C": [0.1, 1, 10, 100],
@@ -406,8 +455,12 @@ def create_hurdle_pipeline_param_grid(
         param_grid["select_k_best__score_func"] = select_k_score_func
 
     # HurdleRegression parameters
-    clf_params = choose_param_grid(clf_model, grid_search_type, add_str_to_keys="hurdle__clf_params")
-    reg_params = choose_param_grid(reg_model, grid_search_type, add_str_to_keys="hurdle__reg_params")
+    clf_params = choose_param_grid(
+        clf_model, grid_search_type, add_str_to_keys="hurdle__clf_params"
+    )
+    reg_params = choose_param_grid(
+        reg_model, grid_search_type, add_str_to_keys="hurdle__reg_params"
+    )
 
     param_grid.update(clf_params)
     param_grid.update(reg_params)

@@ -5,7 +5,9 @@
 
 import itertools
 import math
+import os
 import pickle
+import random
 from contextlib import contextmanager
 from copy import deepcopy
 from os import makedirs as os_makedirs
@@ -21,14 +23,46 @@ from warnings import warn
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 from prettytable import PrettyTable
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.model_selection._search import BaseSearchCV
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from utils.config import CACHE_DIR, DPI
 from utils.logger import logger
+
+
+def seed_everything(seed=0) -> None:
+    """Seeds everything to make outputs deterministic with given `seed`."""
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def make_train_test_split(
+    X, y, to_dataframe=True, verbose=True, **kwargs
+) -> tuple[np.ndarray | pd.DataFrame, np.ndarray]:
+    """Calls `sklearn.model_selection.train_test_split(X, y, **kwargs)` and returns as a dataframe if
+    `to_dataframe=True` and X is originally a dataframe."""
+    X_train, X_test, y_train, y_test = train_test_split(X, y, **kwargs)
+
+    # If X_train is not a DataFrame, convert it
+    if not isinstance(X_train, pd.DataFrame) and to_dataframe and isinstance(X, pd.DataFrame):
+        X_train = pd.DataFrame(X_train.toarray(), columns=X.columns)
+        X_test = pd.DataFrame(X_test.toarray(), columns=X.columns)
+
+    if verbose:
+        print("Training shape:", X_train.shape)
+        print("Testing shape:", X_test.shape)
+
+    return X_train, X_test, y_train, y_test
 
 
 def expected_poly_number_features(n_features: int, degree: int, total_columns: int) -> int:
@@ -312,7 +346,7 @@ def categorical_and_numerical_columns(
         The input DataFrame to analyze.
     dtypes : dict, optional
         A dictionary containing the data types for categorical and numerical columns. The keys are
-        'categorical' and 'numerical', and the values are lists of data types (default is 
+        'categorical' and 'numerical', and the values are lists of data types (default is
         `{'categorical': ['object'], 'numerical': ['int64', 'float64']})`.
     dummy_is_categorical : bool, optional
         If True, columns with dummy values produced by one-hot encoding with `pd.get_dummies()` are
@@ -563,7 +597,9 @@ def describe_cols(df: pd.DataFrame, separate=False, tabs=0, scalers={}, log=Fals
     the last column of the table is updated with the names of the scalers used for the columns. The
     `kwargs` are passed to the `categorical_and_numerical_columns()` function."""
     string = ""
-    categorical_columns, numerical_columns = categorical_and_numerical_columns(df, log=log, **kwargs)
+    categorical_columns, numerical_columns = categorical_and_numerical_columns(
+        df, log=log, **kwargs
+    )
 
     categorical_cols_stats = categorical_stats_per_column(
         df, categorical_columns
@@ -725,101 +761,15 @@ def parsed_cv_results_to_df(parsed_cv_results: dict) -> pd.DataFrame:
     return df
 
 
-def scatter_plot(
-    X: np.ndarray,
-    indices: list[pd.Index] = [],
-    labels=None,
-    style="seaborn",
-    title="",
-    xlabel="x",
-    ylabel="y",
-    zlabel="z",
-    figsize=(6, 4),
-) -> None:
-    """Scatter plot for dimensionality reduced data.
-
-    Parameters
-    ----------
-    X : np.ndarray
-        The dimensionality reduced data.
-    indices : list of pd.Index
-        A list of indices specifying different groups to plot. Useful to color different groups of
-        points differently, by default []
-    labels : list of str, optional
-        List of labels for each group, by default None
-    style : str, optional
-        The plot style to use, by default "seaborn"
-    title : str, optional
-        The title of the plot, by default ""
-    xlabel, ylabel, zlabel : str, optional
-        The labels for the x, y, and z axes, by default "x", "y", "z"
-    figsize : tuple, optional
-        The figure size, by default (6, 4)
-    """
-    if style is None:
-        style = "seaborn"
-
-    with plt.style.context(style):
-        fig = plt.figure(figsize=figsize, dpi=DPI)
-        num_axes = X.shape[1]
-
-        if num_axes not in [1, 2, 3]:
-            raise ValueError("X must have either 1, 2 or 3 columns for 1D, 2D or 3D plotting.")
-
-        if num_axes in [1, 2]:
-            ax = fig.add_subplot(111)
-        else:
-            ax = fig.add_subplot(111, projection="3d")
-
-        # If the indices are not provided, plot all the data points as a single group
-        if not indices:
-            indices = [pd.Index(range(X.shape[0]))]
-
-        for i, idx in enumerate(indices):
-            label = f"Group {i + 1}" if labels is None else labels[i]
-            if num_axes == 1:
-                ax.scatter(X[idx], np.zeros_like(X[idx]), label=label, alpha=0.6)
-            elif num_axes == 2:
-                ax.scatter(X[idx, 0], X[idx, 1], label=label, alpha=0.6)
-            else:
-                ax.scatter(X[idx, 0], X[idx, 1], X[idx, 2], label=label, alpha=0.6)
-
-        ax.set_xlabel(xlabel)
-        if num_axes > 1:
-            ax.set_ylabel(ylabel)
-        if num_axes == 3:
-            ax.set_zlabel(zlabel)
-        if title:
-            ax.set_title(title)
-
-        ax.legend()
-
-        if num_axes == 1:
-            ax.set_yticks([])
-        else:
-            ax.set_xticks([])
-            ax.set_yticks([])
-
-        if num_axes == 3:
-            ax.set_zticks([])
-            ax.set_box_aspect([1, 1, 1], zoom=0.8)
-
-        ax.set_aspect("auto")
-        plt.show()
-
-
 @contextmanager
-def safe_latex_context(df: pd.DataFrame) -> callable:
+def safe_latex_context() -> callable:
     """A context manager to safely escape the column names in a DataFrame for LaTeX rendering in
     matplotlib plots. It temporarily replaces underscores with LaTeX-friendly underscores in the
-    column names. The original column names are restored after the context is exited."""
+    provided string."""
     underscore = "$\mathrm{\_}$"
-    original_columns = df.columns.copy()
-    escaped_columns = [col.replace("_", underscore) for col in df.columns]
-    column_map = dict(zip(original_columns, escaped_columns))
 
     def safe_column_access(col):
-        return column_map.get(col, col.replace("_", underscore) if isinstance(col, str) else col)
+        return col.replace("_", underscore) if isinstance(col, str) else col
 
     original_xlabel = plt.xlabel
     original_ylabel = plt.ylabel

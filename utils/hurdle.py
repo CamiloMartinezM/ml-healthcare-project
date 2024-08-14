@@ -11,13 +11,17 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier, LGBMRegressor
 from sklearn.base import BaseEstimator
+from sklearn.calibration import LinearSVC
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import (
+    Lasso,
     LinearRegression,
     LogisticRegression,
     PassiveAggressiveRegressor,
+    Ridge,
     TweedieRegressor,
 )
+from sklearn.svm import SVC, SVR, LinearSVR
 from sklearn.utils.estimator_checks import check_estimator
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from xgboost import XGBRegressor
@@ -65,6 +69,12 @@ class HurdleRegression(BaseEstimator):
             "TweedieRegressor": TweedieRegressor(),
             "XGBRegressor": XGBRegressor(),
             "PassiveAggressiveRegressor": PassiveAggressiveRegressor(),
+            "SVR": SVR(),
+            "SVC": SVC(),
+            "LinearSVR": LinearSVR(),
+            "LinearSVC": LinearSVC(),
+            "Ridge": Ridge(),
+            "Lasso": Lasso(),
         }
 
         if func_name not in funcs:
