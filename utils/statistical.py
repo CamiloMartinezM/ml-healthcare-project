@@ -440,7 +440,7 @@ def iqr_outliers(data, factor=1.5, lower_percentile=25, uppper_percentile=75) ->
 def detect_outliers(
     df: pd.DataFrame | np.ndarray,
     method="z-score",
-    z_score_threshold=3.5,
+    z_score_threshold=3,
     z_score_constant=0.6745,
     iqr_lower_percentile=1,
     iqr_upper_percentile=99,
@@ -480,9 +480,7 @@ def detect_outliers(
         z_scores = zscore(df)
         outliers = (z_scores.abs() > z_score_threshold).any(axis=1)
     elif method == "modified-z-score":
-        modified_z_scores = modified_z_score(
-            df, constant=z_score_constant, exclude_cols=exclude_cols
-        )
+        modified_z_scores = modified_z_score(df, constant=z_score_constant)
         outliers = (modified_z_scores.abs() > z_score_threshold).any(axis=1)
     elif method == "iqr":
         outliers = iqr_outliers(

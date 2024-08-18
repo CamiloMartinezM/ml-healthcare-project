@@ -5,16 +5,278 @@
 
 import math
 import random
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
+from sklearn.metrics import PredictionErrorDisplay
 
 from utils.config import DPI
-from utils.dimensionality_reduction import apply_ica, apply_lda, apply_pca, apply_tsne
+from utils.dimensionality_reduction import apply_ica, apply_lda, apply_pca, apply_tsne, apply_umap
 from utils.helpers import categorical_and_numerical_columns, safe_latex_context
 from utils.logger import logger
+
+
+class MetricPlot:
+    """A class to create a line plot with multiple axes."""
+
+    def __init__(self):
+        self.axes = {}
+        self.data_entries = []
+        self.sort_by = None
+        self.sort_ascending = True
+        self.used_labels = set()
+        self.color_by = "metric"  # or 'set'
+        self.unique_metrics = []
+
+    def add_axis(self, name, title=None):
+        if name in self.axes:
+            raise ValueError(f"Axis '{name}' already exists.")
+        self.axes[name] = {"data": [], "title": title, "color": None}
+
+    def add_data(
+        self,
+        axis_name: str,
+        x: str | np.ndarray | list,
+        y: str | np.ndarray | list,
+        set_name: str,
+        metric_name: str,
+        data_df: pd.DataFrame | None = None,
+        line_style="-",
+        marker_style="o",
+        color=None,
+        alpha=1.0,
+    ) -> None:
+        if axis_name not in self.axes:
+            raise ValueError(f"Axis '{axis_name}' does not exist. Add it first with add_axis().")
+
+        if data_df is not None and not isinstance(x, str) and not isinstance(y, str):
+            raise ValueError(
+                "If data_df is provided, x and y must be strings representing " + "column names."
+            )
+
+        if data_df is None and isinstance(x, str) and isinstance(y, str):
+            raise ValueError("If data_df is not provided, x and y must be arrays or lists.")
+
+        elif (
+            data_df is None
+            and isinstance(x, (np.ndarray, list, pd.Series))
+            and isinstance(y, (np.ndarray, list, pd.Series))
+        ):
+            data_df = pd.DataFrame({"x": x, "y": y})
+
+        if data_df is None:
+            data_df = pd.DataFrame({"x": x, "y": y})
+
+        self.axes[axis_name]["data"].append(
+            {
+                "data_df": data_df,
+                "x_column": "x",
+                "y_column": "y",
+                "set_name": set_name,
+                "metric_name": metric_name,
+                "line_style": line_style,
+                "marker_style": marker_style,
+                "color": color,
+                "alpha": alpha,
+            }
+        )
+
+    def set_color_by(self, by: str):
+        if by not in ["metric", "set"]:
+            raise ValueError("color_by must be either 'metric' or 'set'")
+        self.color_by = by
+
+    def set_sort(self, axis: str, ascending: bool = True) -> None:
+        self.sort_by = axis
+        self.sort_ascending = ascending
+
+    def plot(
+        self,
+        figsize=(20, 10),
+        title="",
+        xlabel="",
+        xtick_rotation=0,
+        grid=True,
+        legend_loc="best",
+        style="default",
+        twin_axis_offset=40,
+        cmap=None,
+        save_path=None,
+        save_format="svg",
+        show=True,
+        dpi=300,
+    ) -> None:
+        with plt.style.context(style):
+            fig, ax_main = plt.subplots(figsize=figsize, dpi=dpi, constrained_layout=True)
+            axes = [ax_main]
+
+            unique_sets = set(
+                entry["set_name"]
+                for (_, axis_data) in self.axes.items()
+                for entry in axis_data["data"]
+            )
+            unique_metrics = list(self.axes.keys())
+
+            if self.color_by == "metric":
+                if not cmap:
+                    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"][
+                        : len(unique_metrics)
+                    ]
+                else:
+                    colors = plt.cm.get_cmap(cmap)(np.linspace(0, 1, len(unique_metrics)))
+                color_dict = dict(zip(unique_metrics, colors))
+                marker_dict = dict(zip(unique_sets, ["o", "s", "^", "D", "v", "<", ">"]))
+            else:  # color_by == 'set'
+                if not cmap:
+                    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"][: len(unique_sets)]
+                else:
+                    colors = plt.cm.get_cmap(cmap)(np.linspace(0, 1, len(unique_sets)))
+                color_dict = dict(zip(unique_sets, colors))
+                marker_dict = dict(zip(unique_metrics, ["o", "s", "^", "D", "v", "<", ">"]))
+
+            for i, (axis_name, axis_data) in enumerate(self.axes.items()):
+                ax = ax_main if i == 0 else ax_main.twinx()
+
+                if i > 0:
+                    ax.spines["right"].set_position(("outward", twin_axis_offset * (i - 1)))
+
+                if self.sort_by == axis_name:
+                    sort_data = axis_data["data"][0]["data_df"]
+                    sort_column = axis_data["data"][0]["y_column"]
+                    sorted_indices = sort_data.sort_values(
+                        sort_column, ascending=self.sort_ascending
+                    ).index
+                    for entry in axis_data["data"]:
+                        entry["data_df"] = entry["data_df"].reindex(sorted_indices)
+
+                for entry in axis_data["data"]:
+                    x_data = entry["data_df"][entry["x_column"]]
+                    y_data = entry["data_df"][entry["y_column"]]
+
+                    color = color_dict[
+                        entry["metric_name" if self.color_by == "metric" else "set_name"]
+                    ]
+                    marker = marker_dict[
+                        entry["set_name" if self.color_by == "metric" else "metric_name"]
+                    ]
+
+                    ax.plot(
+                        x_data,
+                        y_data,
+                        linestyle=entry["line_style"],
+                        marker=marker,
+                        color=color,
+                        alpha=entry["alpha"],
+                        label=f"{entry['set_name']} - {entry['metric_name']}",
+                        markersize=2,
+                    )
+
+                    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+                    ax.tick_params(
+                        axis="y",
+                        which="both",  # This affects both major and minor ticks
+                        colors=color if self.color_by == "metric" else "black",
+                        labelcolor=color if self.color_by == "metric" else "black",
+                    )
+
+                    # Add these lines to color the ticks themselves
+                    ax.yaxis.set_tick_params(color=color if self.color_by == "metric" else "black")
+                    ax.yaxis.set_tick_params(
+                        which="minor", color=color if self.color_by == "metric" else "black"
+                    )
+
+                    # This line colors the axis line itself
+                    if i > 0:
+                        ax.spines["right"].set_color(
+                            color if self.color_by == "metric" else "black"
+                        )
+                    else:
+                        ax.spines["left"].set_color(color if self.color_by == "metric" else "black")
+
+                if axis_data["title"]:
+                    ax.set_ylabel(
+                        axis_data["title"], color=color if self.color_by == "metric" else "black"
+                    )
+
+                axes.append(ax)
+
+            # Set labels and title
+            ax_main.set_xlabel(xlabel)
+            ax_main.set_title(title)
+
+            # Deactivate minor ticks in the x-axis
+            ax_main.xaxis.set_minor_locator(plt.NullLocator())
+
+            # Rotate x-axis labels
+            plt.setp(ax_main.get_xticklabels(), rotation=xtick_rotation)
+
+            # Add grid
+            if grid:
+                ax_main.grid(True, linestyle="--", alpha=0.7)
+
+            # Add legend
+            if self.color_by == "set":
+                legend_elements = [
+                    Patch(facecolor=color_dict[set_], label=set_.capitalize())
+                    for set_ in unique_sets
+                ]
+                legend_elements += [
+                    Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        linewidth=0.5,
+                        marker=marker_dict[metric],
+                        label="-".join(word.capitalize() for word in metric.split("-")),
+                    )
+                    for metric in unique_metrics if len(unique_metrics) > 1
+                ]
+            else:
+                legend_elements = [
+                    Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        linewidth=0.5,
+                        marker=marker_dict[set_],
+                        label=set_.capitalize(),
+                    )
+                    for set_ in unique_sets
+                ]
+                legend_elements += [
+                    Patch(
+                        facecolor=color_dict[metric],
+                        label="-".join(word.capitalize() for word in metric.split("-")),
+                    )
+                    for metric in unique_metrics if len(unique_metrics) > 1
+                ]
+
+            ax_main.legend(
+                handles=legend_elements,
+                loc=legend_loc,
+            )
+
+            # Adjust layout
+            fig.tight_layout()
+
+            # Save the plot if a save path is provided
+            if save_path:
+                fig.savefig(
+                    f"{save_path}.{save_format}",
+                    format=save_format,
+                    dpi=dpi,
+                    bbox_inches="tight",
+                )
+
+            if show:
+                plt.show()
+            plt.close(fig)
 
 
 def plot_features_vs_target(
@@ -239,15 +501,14 @@ def visualize(
     style=None,
     **kwargs,
 ) -> None:
-    """Apply dimensionality reduction (PCA, ICA, LDA or t-SNE) and plot the results, coloring the
-    specified groups in indices.
+    """Apply dimensionality reduction and plot the results, coloring the specified groups in indices.
 
     Parameters
     ----------
     X : np.ndarray | pd.DataFrame
         The input data to be transformed and visualized.
     method : str, optional
-        The method to use for dimensionality reduction. Can be 'pca', 'tsne', or 'lda'
+        The method to use for dimensionality reduction. Can be 'pca', 'tsne', 'ica', 'umap', or 'lda'
         (default: 'pca')
     n_components : int, optional
         Number of dimensions to reduce to (default: 2)
@@ -282,8 +543,12 @@ def visualize(
             X_reduced = apply_lda(X, indices=indices, n_components=n_components)
         elif method == "ica":
             X_reduced = apply_ica(X, n_components=n_components, random_state=random_state)
+        elif method == "umap":
+            X_reduced = apply_umap(X, n_components=n_components)
         else:
-            raise ValueError(f"Unknown method: {method}. Use 'pca', 'ica', 'tsne', or 'lda'.")
+            raise ValueError(
+                f"Unknown method: {method}. Use 'pca', 'ica', 'tsne', 'umap', or 'lda'."
+            )
     else:
         logger.info(f"Not applying {method} because X.shape = {X.shape}")
         if not isinstance(X, np.ndarray):
@@ -302,3 +567,77 @@ def visualize(
         zlabel="$PC_3$",
         **kwargs,
     )
+
+
+def regression_performance_comparison(
+    y_i,
+    y_pred,
+    y_pred_transformed=None,
+    regressor_name=None,
+    suptitle=None,
+    metrics=None,
+    style="default",
+) -> None:
+    if metrics:
+        assert len(metrics) == 2, "Only two metrics are supported: actual vs transformed"
+
+    ncols = 2 if y_pred_transformed is not None else 1
+
+    with plt.style.context(style):
+        f, (ax0, ax1) = plt.subplots(
+            2, ncols, sharey="row", figsize=(10, 8), constrained_layout=True
+        )
+
+        # plot the actual vs predicted values
+        PredictionErrorDisplay.from_predictions(
+            y_i,
+            y_pred,
+            kind="actual_vs_predicted",
+            ax=ax0[0],
+            scatter_kwargs={"alpha": 0.5},
+        )
+        if y_pred_transformed is not None:
+            PredictionErrorDisplay.from_predictions(
+                y_i,
+                y_pred_transformed,
+                kind="actual_vs_predicted",
+                ax=ax0[1],
+                scatter_kwargs={"alpha": 0.5},
+            )
+
+        # Add the score in the legend of each axis
+        if metrics:
+            for i, (ax, scores) in enumerate(
+                zip([ax0[0], ax0[1]], [metrics[0].values, metrics[1].values])
+            ):
+                for name, score in zip([metrics[i].keys()], scores):
+                    ax.plot([], [], " ", label=f"{name} = {score}")
+            ax.legend(loc="upper left")
+
+        prev = regressor_name + "\n" if regressor_name is not None else ""
+        ax0[1].set_title(f"{prev}With $y$ transformed")
+        ax0[0].set_xlabel("")
+        ax0[1].set_xlabel("")
+
+        # plot the residuals vs the predicted values
+        PredictionErrorDisplay.from_predictions(
+            y_i,
+            y_pred,
+            kind="residual_vs_predicted",
+            ax=ax1[0],
+            scatter_kwargs={"alpha": 0.5},
+        )
+        PredictionErrorDisplay.from_predictions(
+            y_i,
+            y_pred_transformed,
+            kind="residual_vs_predicted",
+            ax=ax1[1],
+            scatter_kwargs={"alpha": 0.5},
+        )
+        ax1[1].set_ylabel("")
+
+        if suptitle is not None:
+            plt.suptitle(suptitle)
+        f.tight_layout()
+        plt.show()
+        plt.close()

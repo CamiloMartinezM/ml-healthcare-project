@@ -4,12 +4,14 @@
 # Description: This file defines helper functions that are used in the project.
 
 import itertools
+import json
 import math
 import os
 import pickle
 import random
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import datetime
 from os import makedirs as os_makedirs
 from os.path import basename as path_basename
 from os.path import exists as path_exists
@@ -46,6 +48,11 @@ def seed_everything(seed=0) -> None:
         torch.backends.cudnn.benchmark = False
 
 
+def current_datetime() -> str:
+    """Return the current date and time in the format 'YYYY-MM-DD_HH-MM-SS'."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
 def make_train_test_split(
     X, y, to_dataframe=True, verbose=True, **kwargs
 ) -> tuple[np.ndarray | pd.DataFrame, np.ndarray]:
@@ -63,6 +70,15 @@ def make_train_test_split(
         print("Testing shape:", X_test.shape)
 
     return X_train, X_test, y_train, y_test
+
+
+def replace_keys(d: dict, mapping: dict) -> dict:
+    """Replace keys in a dictionary based on a `mapping`. If a key is not found in the mapping, it
+    will be kept as is."""
+    return {
+        mapping.get(k, k): v if not isinstance(v, dict) else replace_keys(v, mapping)
+        for k, v in d.items()
+    }
 
 
 def expected_poly_number_features(n_features: int, degree: int, total_columns: int) -> int:
@@ -698,7 +714,9 @@ def tab_prettytable(table: PrettyTable, tabs: int) -> str:
     return tabbed
 
 
-def parse_cv_results(grid_search: BaseSearchCV | dict, scoring_prefix="mean_", include_train=False):
+def parse_cv_results(
+    grid_search: BaseSearchCV | dict, scoring_prefix="mean_", include_train=True, test_is_val=True
+) -> dict:
     """Parse the `cv_results_` from a `GridSearchCV` or similar object to extract scoring metrics.
 
     Parameters
@@ -707,6 +725,10 @@ def parse_cv_results(grid_search: BaseSearchCV | dict, scoring_prefix="mean_", i
         The `GridSearchCV` object or the dictionary containing the `cv_results_` attribute.
     scoring_prefix : str, default="mean_test_"
         The prefix used for the scoring metrics in the `cv_results_` dictionary.
+    include_train : bool, default=False
+        Whether to include the training metrics in the results.
+    test_is_val : bool, default=True
+        Whether the test metrics are actually validation metrics (e.g., cross-validation).
 
     Returns
     -------
@@ -729,12 +751,15 @@ def parse_cv_results(grid_search: BaseSearchCV | dict, scoring_prefix="mean_", i
     metrics = {}
     for curr_scoring_prefix in scoring_prefixs:
         curr_results = {
-            key.replace(curr_scoring_prefix, ""): -cv_results[key][best_index]
+            key.replace(curr_scoring_prefix, ""): (
+                -cv_results[key][best_index] if "neg" in key else cv_results[key][best_index]
+            )
             for key in cv_results.keys()
             if key.startswith(curr_scoring_prefix)
         }
         if curr_results:
             split = curr_scoring_prefix[:-1].replace(scoring_prefix, "")
+            split = "val" if split == "test" and test_is_val else split
             metrics[split] = curr_results
 
     return metrics
@@ -759,6 +784,328 @@ def parsed_cv_results_to_df(parsed_cv_results: dict) -> pd.DataFrame:
     df.columns = multi_index
     df = df.sort_index(axis=1, level=["Metric", "Split/Scale"], ascending=[True, False])
     return df
+
+
+def parsed_cv_results_to_prettytable(
+    metrics_list: list[dict],
+    names: list[str] | None = None,
+    key_mapping: dict = {
+        "mean_absolute_error": "MAE",
+        "median_absolute_error": "MedAE",
+        "r2": "R²",
+    },
+    sort_set=["train", "val", "test"],
+) -> PrettyTable:
+    """Convert a list of metric dictionaries to a PrettyTable. Metric dictionaries must have the
+    following structure: `{row: {col: value, ...}}`, where `row` will be the row name and `col` will
+    be the column name. For example,
+
+    ```
+    metrics = {
+        split_name: {
+            metric_name: value,
+            ...
+        },
+        ...
+    }
+    ```
+
+    Parameters
+    ----------
+    metrics_list : list[dict]
+        List of dictionaries containing metrics.
+    names : list[str] | None, optional
+        List of names for each dictionary in metrics_list. If provided, the names will be used to
+        label the metrics in the table, by default None.
+    key_mapping : dict, optional
+        Dictionary to map metric names to new names. If provided but a metric is not found in the
+        dictionary, the original metric name will be used, by default
+        `{"mean_absolute_error": "MAE", "median_absolute_error": "MedAE", "r2": "R²"}`.
+
+
+    Returns
+    -------
+    PrettyTable
+        A formatted table of the metrics.
+    """
+    if names and len(metrics_list) != len(names):
+        raise ValueError("Length of metrics_list and names must be the same.")
+
+    if key_mapping:
+        metrics_list = [replace_keys(metrics, key_mapping) for metrics in metrics_list]
+
+    # Get all unique sets (train, test, etc.) and metrics
+    all_sets = set()
+    all_metrics = set()
+    for metrics in metrics_list:
+        all_sets.update(metrics.keys())
+        for s in metrics:
+            all_metrics.update(metrics[s].keys())
+
+    # Create the table
+    table = PrettyTable()
+    table.field_names = ["Set"] + list(all_metrics)
+    table.align["Set"] = "l"
+    for metric in all_metrics:
+        table.align[metric] = "c"
+
+    # Fill the table
+    for s in sorted(all_sets):
+        row = [s]
+        for metric in all_metrics:
+            cell = []
+            for i, metrics in enumerate(metrics_list):
+                if s in metrics and metric in metrics[s]:
+                    additional_desc = (
+                        f" ({names[i]})" if names and i < len(names) and names[i] else ""
+                    )
+                    cell.append(f"{metrics[s][metric]:.4f}{additional_desc}")
+            row.append("\n".join(cell) if cell else "")
+        table.add_row(row)
+
+    if sort_set:
+        table = sort_prettytable(table, "Set", sort_set)
+    return table
+
+
+def sort_prettytable(
+    table: PrettyTable, sort_column: str, custom_order: list[str] | None = None
+) -> PrettyTable:
+    """
+    Sort a PrettyTable by a specified column, optionally using a custom order.
+
+    Parameters
+    ----------
+    table : PrettyTable
+        The table to sort.
+    sort_column : str
+        The name of the column to sort by.
+    custom_order : list[str] | None, optional
+        A list specifying the desired order of values.
+
+    Returns
+    -------
+    PrettyTable
+        A new sorted PrettyTable.
+
+    Raises
+    ------
+    ValueError
+        If the sort_column is not in the table or if custom_order contains values not present in the
+        column.
+    """
+    # Check if the sort_column exists in the table
+    if sort_column not in table.field_names:
+        raise ValueError(f"Column '{sort_column}' not found in the table.")
+
+    # Get the index of the sort column
+    sort_column_index = table.field_names.index(sort_column)
+
+    # Extract rows from the table
+    rows = table.rows
+
+    if custom_order:
+        # Create a dictionary mapping custom order values to their positions
+        order_dict = {value: index for index, value in enumerate(custom_order)}
+
+        # Check if all values in the sort column are in the custom order
+        column_values = set(row[sort_column_index] for row in rows)
+        if not column_values.issubset(set(custom_order)):
+            raise ValueError("Custom order doesn't cover all values in the sort column.")
+
+        # Sort rows based on the custom order
+        sorted_rows = sorted(
+            rows, key=lambda row: order_dict.get(row[sort_column_index], len(custom_order))
+        )
+    else:
+        # If no custom order is provided, sort normally
+        sorted_rows = sorted(rows, key=lambda row: row[sort_column_index])
+
+    # Create a new PrettyTable with the same field names
+    sorted_table = PrettyTable()
+    sorted_table.field_names = table.field_names
+
+    # Add sorted rows to the new table
+    for row in sorted_rows:
+        sorted_table.add_row(row)
+
+    # Copy the style from the original table
+    sorted_table._align = table._align if isinstance(table._align, str) else table._align.copy()
+    sorted_table._valign = table._valign if isinstance(table._valign, str) else table._valign.copy()
+    sorted_table.max_width = table.max_width
+    sorted_table.border = table.border
+    sorted_table.header = table.header
+    sorted_table.padding_width = table.padding_width
+
+    return sorted_table
+
+
+def describe_param_grid(param_grid: list[dict] | dict, tabs=0) -> str:
+    """Describe the given `param_grid` in a human-readable format."""
+
+    def format_value(value):
+        if isinstance(value, list):
+            return f"[{', '.join(str(v) for v in value)}]"
+        return str(value)
+
+    def describe_single_grid(grid):
+        description = []
+        for key, value in grid.items():
+            formatted_value = format_value(value)
+            description.append(f"\t{key}: {formatted_value}")
+        return "\n".join(description) if not tabs else tab_lines(description, tabs)
+
+    if isinstance(param_grid, list):
+        descriptions = []
+        for i, grid in enumerate(param_grid, 1):
+            descriptions.append(f"Parameter grid {i}:")
+            descriptions.append(describe_single_grid(grid))
+            descriptions.append("")  # Add a blank line between grids
+        return "\n".join(descriptions) if not tabs else tab_lines(descriptions, tabs)
+    elif isinstance(param_grid, dict):
+        return describe_single_grid(param_grid)
+
+
+def tab_lines(lines: list[str], tabs: int) -> str:
+    """Return the list of `lines` as a string with `'\\t' * tabs` at the beginning of each line."""
+    tabs = 0 if tabs < 0 else tabs
+    tab_str = "\t" * tabs
+    tabbed = tab_str + "\n".join(lines).replace("\n", "\n" + tab_str)
+    return tabbed
+
+
+def pretty_print_dict(
+    d: dict,
+    inline=False,
+    include_brackets=False,
+    quote_keys=False,
+    indent_keys=True,
+    nums_as_pct=False,
+    tabs=1,
+) -> str:
+    """Pretty print a dictionary with optional parameters for better readability."""
+    separators = (",", ": ")
+    d = make_json_serializable(d)
+    pretty_str = json.dumps(d, separators=separators, indent=4)
+    pretty_str = pretty_str.replace('"', "") if not quote_keys else pretty_str
+    pretty_str = pretty_str[1:-1] if not include_brackets else pretty_str
+    all_lines = pretty_str.split("\n")
+    nonempty_lines = [
+        line.strip() for line in all_lines if line.strip() != ""
+    ]  # Filter out empty lines
+    pretty_string = ""
+    for i, line in enumerate(nonempty_lines):
+        if indent_keys:
+            pretty_string += "\t" * tabs
+        elif inline:
+            pretty_string += " " if i > 0 else ""
+
+        if not nums_as_pct:
+            pretty_string += line
+        else:
+            # Convert numbers to percentages
+            line_parts = line.split(": ")
+            key, value = line_parts
+            value = value.replace(",", "")
+            value = f"{float(value) * 100:.2f}%"
+            pretty_string += f"{key}: {value}"
+
+        pretty_string += "\n" if i < len(nonempty_lines) - 1 else ""
+
+    if inline:
+        pretty_string = pretty_string.replace("\n", "")
+
+    return pretty_string
+
+
+# def make_json_serializable(data: dict, ignore_non_serializable=False, warn=False) -> dict:
+#     """Make the given `data` dictionary JSON serializable by converting all keys and values to
+#     strings. If `ignore_non_serializable` is `True`, non-serializable values are ignored, i.e., not
+#     included in the resulting dictionary (a warning is issued if `warn` is `True`). If `False`,
+#     an error is raised when a non-serializable value is encountered."""
+#     json_serializable_data = {}
+#     for key, value in data.items():
+#         json_serializable_value = value.tolist() if isinstance(value, np.ndarray) else value
+
+#         try:
+#             json_serializable_data[str(key)] = (
+#                 json_serializable_value if isinstance(value, (int, float, str)) else str(value)
+#             )
+#         except TypeError as e:
+#             if ignore_non_serializable:
+#                 if warn:
+#                     logger.warning(
+#                         f"Non-serializable value found for key '{key}'. Ignoring it. Error: {e}"
+#                     )
+#                 continue
+#             raise e
+
+#     return json_serializable_data
+
+
+def make_json_serializable(
+    data: Any, ignore_non_serializable: bool = False, warn: bool = False
+) -> Any:
+    """
+    Make the given `data` JSON serializable by recursively converting all keys and values.
+
+    Parameters
+    ----------
+    data : Any
+        The input data to make JSON serializable.
+    ignore_non_serializable : bool, optional
+        If True, non-serializable values are ignored.
+    warn : bool, optional
+        If True, warnings are issued for non-serializable values.
+
+    Returns
+    -------
+    Any
+        JSON serializable version of the input data.
+    """
+
+    def _process_dict(data: dict, ignore_non_serializable: bool, warn: bool) -> dict:
+        result = {}
+        for key, value in data.items():
+            try:
+                result[str(key)] = make_json_serializable(value, ignore_non_serializable, warn)
+            except TypeError as e:
+                if ignore_non_serializable:
+                    if warn:
+                        logger.warning(
+                            f"Non-serializable value found for key '{key}'. Ignoring it. Error: {e}"
+                        )
+                    continue
+                raise e
+        return result
+
+    def _process_list(data: list, ignore_non_serializable: bool, warn: bool) -> list:
+        return [make_json_serializable(item, ignore_non_serializable, warn) for item in data]
+
+    def _process_value(value: Any, ignore_non_serializable: bool, warn: bool) -> Any:
+        if isinstance(value, np.ndarray):
+            return _process_list(value.tolist(), ignore_non_serializable, warn)
+        elif isinstance(value, (int, float, str, bool, type(None))):
+            return value
+        else:
+            try:
+                # Try to convert to string if it's not a basic type
+                return str(value)
+            except TypeError as e:
+                if ignore_non_serializable:
+                    if warn:
+                        logger.warning(
+                            f"Non-serializable value found: {value}. Ignoring it. Error: {e}"
+                        )
+                    return None
+                raise e
+
+    if isinstance(data, dict):
+        return _process_dict(data, ignore_non_serializable, warn)
+    elif isinstance(data, list):
+        return _process_list(data, ignore_non_serializable, warn)
+    else:
+        return _process_value(data, ignore_non_serializable, warn)
 
 
 @contextmanager
@@ -807,18 +1154,19 @@ def is_potential_file_path(path: str) -> bool:
     return path_splitext(base_name)[1] != ""
 
 
-def ensure_directory_exists(directory: str, warn_if_not=True) -> None:
-    """Ensure that a directory exists. If it doesn't, this function will create it. If the given
-    directory is a full path to a file, it will get the parent directory. If `warn_if_not` is `True`,
-    a warning will be shown if the directory does not exist."""
-    # Test if the given directory is a full path to a file, in which case, get the parent directory
-    if is_potential_file_path(directory):
-        directory = Path(directory).parent
-
-    if not path_exists(directory):
-        if warn_if_not:
-            warn(f"Directory {directory} does not exist. Creating it...")
-        os_makedirs(directory)
+def ensure_directory_exists(directory: str, make=True, raise_error=False) -> None:
+    """Ensure that a directory exists. If it doesn't, this function will create it if `make` is True.
+    If `raise_error` is True, it will raise an error if the directory doesn't exist."""
+    if make:
+        os.makedirs(directory, exist_ok=not raise_error)
+    else:
+        if not os.path.exists(directory):
+            if raise_error:
+                raise FileNotFoundError(f"The directory {directory} does not exist.")
+            else:
+                print(f"The directory {directory} does not exist.")
+        else:
+            print(f"The directory {directory} exists.")
 
 
 def exists_in_folder(filename: str, folder: str) -> bool:

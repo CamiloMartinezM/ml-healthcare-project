@@ -3,8 +3,11 @@
 # File: utils/metrics.py
 # Description: This file defines the custom metrics to be used for model evaluation.
 
+from typing import Any
+
 import numpy as np
 import sklearn.metrics as skm
+from param import output
 
 from utils.config import CUPY_INSTALLED
 
@@ -79,3 +82,89 @@ def compute_scores(y_true: np.ndarray, y_pred: np.ndarray) -> tuple:
     r2 = r2_score(y_true, y_pred)
 
     return rmse_value, mae, medse, medae, r2
+
+
+def classification_report(
+    model: Any, data: dict[str, tuple[np.ndarray, np.ndarray]], output_dict=False
+) -> dict | None:
+    """Generate a classification report for the given `model` and `data`.
+
+    Parameters
+    ----------
+    model : Any
+        The trained sklearn model with a `predict` method.
+    data : dict[str, tuple[np.ndarray, np.ndarray]]
+        A dictionary containing the data splits as key-value pairs. For example:
+        ```
+        {
+            "train": (X_train, y_train),
+            "test": (X_test, y_test),
+        }
+        ```
+    output_dict : bool, optional
+        Whether to output the classification report as a dictionary. Default is `False`.
+
+    Returns
+    -------
+    dict | None
+        A dictionary containing the classification report for each data split, if `output_dict` is
+        set to `True`. Otherwise, `None`.
+    """
+    metrics = {}
+    for split_name, dataset in data.items():
+        X_i, y_i = dataset
+        y_pred = model.predict(X_i)
+        report = skm.classification_report(y_i, y_pred, output_dict=True)
+        metrics[split_name] = report
+
+        if not output_dict:
+            print(f"\nSplit: {split_name}")
+            print(skm.classification_report(y_i, y_pred, zero_division=0))
+
+    if output_dict:
+        return metrics
+
+
+def get_metric_comparators(scoring_dict: dict) -> dict:
+    """Create a dictionary of metrics with their comparison functions, such that the function
+    returns `True` if the first value is better than the second value.
+
+    Parameters
+    ----------
+    scoring_dict : dict
+        Dictionary of metric names and their scikit-learn scoring function names. For example,
+        ```
+        {
+            "r2": "r2",
+            "neg_mean_absolute_error": "neg_mean_absolute_error",
+            "neg_mean_squared_error": "neg_mean_squared_error",
+            ...
+        }
+        ```
+
+    Returns
+    -------
+    dict
+        Dictionary of metrics with their comparison functions. For example,
+        ```
+        {
+            "r2": lambda x, y: x > y, # Because higher values are better
+            "neg_mean_absolute_error": lambda x, y: x < y, # Because lower values are better
+            "neg_mean_squared_error": lambda x, y: x < y, # Because lower values are better
+            ...
+        }
+    """
+    metric_comparators = {}
+    for metric, scorer in scoring_dict.items():
+        # Check if the metric name starts with 'neg_'
+        if scorer.startswith("neg_"):
+            # For 'neg_' metrics, lower values are better
+            metric_comparators[metric] = lambda x, y: x < y
+        elif scorer in ["r2", "explained_variance", "max_error"]:
+            # For these metrics, higher values are better
+            metric_comparators[metric] = lambda x, y: x > y
+        else:
+            # For any other metrics, assume higher values are better
+            metric_comparators[metric] = lambda x, y: x > y
+
+    return metric_comparators

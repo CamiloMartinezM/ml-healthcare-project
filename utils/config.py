@@ -5,6 +5,7 @@
 
 import logging
 import multiprocessing
+import os
 import shutil
 from importlib.util import find_spec as importlib_find_spec
 from os.path import join as path_join
@@ -30,7 +31,7 @@ if SCIENCEPLOTS_INSTALLED:
     import scienceplots
 
     PAPER_STYLE = ["science", "ieee"]
-    PAPER_STYLE += ["no-latex"] # if not LATEX_INSTALLED else []
+    PAPER_STYLE += ["no-latex"]  # if not LATEX_INSTALLED else []
     NOTEBOOK_STYLE = ["notebook"]
 else:
     warn(
@@ -75,6 +76,8 @@ CUPY_INSTALLED = importlib_find_spec("cupy") is not None
 if not CUPY_INSTALLED:
     warn("CuPy is not installed. Using NumPy instead.")
 
+logging.getLogger("numba").setLevel(logging.WARNING)
+
 # Suppress Numba CUDA driver debug and info messages
 logging.getLogger("numba.cuda.cudadrv.driver").setLevel(logging.WARNING)
 
@@ -87,3 +90,9 @@ warnings_simplefilter("ignore", RuntimeWarning)
 # DPI for plots (change when final plotting)
 DPI = 200
 plt.rcParams["figure.dpi"] = DPI
+
+# Ignore UserWarnings
+os.environ["PYTHONWARNINGS"] = "ignore::UserWarning"
+
+# Disable file validation for PyDev debugger
+os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"

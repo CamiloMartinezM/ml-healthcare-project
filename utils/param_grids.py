@@ -10,7 +10,7 @@ import numpy as np
 from skopt.space import Categorical, Integer, Real
 
 
-def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
+def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | list[dict]:
     """Get the parameter grid for the specified model and grid search type.
 
     Parameters
@@ -22,7 +22,7 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
 
     Returns
     -------
-    dict
+    dict | list[dict]
         The parameter grid for the specified model and grid search type.
     """
     param_grids = {
@@ -166,16 +166,14 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
         "LinearSVR": {
             "grid": {
                 "C": [0.1, 1, 10, 100],
-                # "intercept_scaling": [1, 10],
-                # "epsilon": [0.0, 0.25, 0.5],
+                "intercept_scaling": [1, 10],
                 "loss": ["epsilon_insensitive", "squared_epsilon_insensitive"],
                 "fit_intercept": [True],
                 "max_iter": [5000],
             },
             "bayes": {
                 "C": Real(0.1, 100, prior="log-uniform"),
-                # "intercept_scaling": Integer(1, 10),
-                # "epsilon": Real(0.0, 1.0, prior="uniform"),
+                "intercept_scaling": Integer(1, 10),
                 "loss": Categorical(["epsilon_insensitive", "squared_epsilon_insensitive"]),
                 "fit_intercept": Categorical([True]),
                 "max_iter": 5000,
@@ -213,16 +211,38 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
             },
         },
         "LogisticRegression": {
-            "grid": {
-                "C": [0.1, 1, 10, 100],
-                "penalty": ["l1", "l2"],
-                "fit_intercept": [True, False],
-            },
-            "bayes": {
-                "C": Real(0.1, 100, prior="log-uniform"),
-                "penalty": Categorical(["l1", "l2"]),
-                "fit_intercept": Categorical([True, False]),
-            },
+            "grid": [
+                {
+                    "penalty": ["l2"],  # lbfgs supports only l2 penalty
+                    "C": [0.1, 1, 10, 100],
+                    "solver": ["lbfgs"],
+                    "class_weight": ["balanced", None],
+                    "max_iter": [5000],
+                },
+                {
+                    "penalty": ["l1"],  # saga and liblinear support l1 penalty
+                    "C": [0.1, 1, 10, 100],
+                    "solver": ["liblinear"],
+                    "class_weight": ["balanced", None],
+                    "max_iter": [5000],
+                },
+            ],
+            "bayes": [
+                {
+                    "penalty": Categorical(["l2"]),
+                    "C": Real(0.1, 100, prior="log-uniform"),
+                    "solver": Categorical(["lbfgs", "saga"]),
+                    "class_weight": Categorical(["balanced", None]),
+                    "max_iter": 5000,
+                },
+                {
+                    "penalty": Categorical(["l1"]),
+                    "C": Real(0.1, 100, prior="log-uniform"),
+                    "solver": Categorical(["liblinear", "saga"]),
+                    "class_weight": Categorical(["balanced", None]),
+                    "max_iter": 5000,
+                },
+            ],
         },
         "LGBMClassifier": {
             "grid": {
@@ -236,6 +256,42 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
                 "n_estimators": Integer(20, 40),
             },
         },
+        "SGDClassifier": {
+            "grid": {
+                "alpha": [0.0001, 0.001, 0.01],
+                "penalty": ["l1", "l2", "elasticnet"],
+                "loss": ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"],
+                "class_weight": ["balanced", None],
+                "fit_intercept": [True],
+                "max_iter": [5000],
+            },
+            "bayes": {
+                "alpha": Real(1e-4, 1e-2, prior="log-uniform"),
+                "penalty": Categorical(["l1", "l2", "elasticnet"]),
+                "loss": Categorical(
+                    ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"]
+                ),
+                "class_weight": Categorical(["balanced", None]),
+                "fit_intercept": Categorical([True]),
+                "max_iter": Categorical([5000]),
+            },
+        },
+        "MBSGDClassifier": {
+            "grid": {
+                "alpha": [0.0001, 0.001, 0.01],
+                "penalty": ["l1", "l2", "elasticnet"],
+                "loss": ["hinge", "log", "squared_loss"],
+                "fit_intercept": [True, False],
+                "epochs": [1000, 5000],
+            },
+            "bayes": {
+                "alpha": Real(1e-4, 1e-2, prior="log-uniform"),
+                "penalty": Categorical(["l1", "l2", "elasticnet"]),
+                "loss": Categorical(["hinge", "log", "squared_loss"]),
+                "fit_intercept": Categorical([True, False]),
+                "epochs": Categorical([1000, 5000]),
+            },
+        },
     }
     if model_name not in param_grids:
         raise ValueError(f"Model {model_name} not found in param_grids.py")
@@ -245,7 +301,7 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict:
     return param_grids.get(model_name, {}).get(grid_search_type, None)
 
 
-def choose_param_grid(model: Any, grid_search_type: str, add_str_to_keys=None) -> dict:
+def choose_param_grid(model: Any, grid_search_type="grid", add_str_to_keys=None) -> dict:
     """Choose a suitable hyperparameter grid to use with `GridSearchCV` or similar object based on
     the model class and the `grid_search_type` to be performed.
 
@@ -254,8 +310,8 @@ def choose_param_grid(model: Any, grid_search_type: str, add_str_to_keys=None) -
     model : Any
         The model object to get the hyperparameter grid for. It should be a valid scikit-learn or
         cuML model object.
-    grid_search_type : str
-        The type of grid search to perform. It should be either 'grid' or 'bayes'.
+    grid_search_type : str, optional
+        The type of grid search to perform. It should be either 'grid' or 'bayes', by default "grid"
     add_str_to_keys : str, optional
         A string to add to the beginning of each key in the parameter grid, by default None
 
@@ -470,3 +526,54 @@ def create_hurdle_pipeline_param_grid(
     combinations = [dict(zip(keys, [[i] for i in v])) for v in product(*values)]
 
     return combinations
+
+
+def make_smaller_param_grid(param_grid: dict, subset=2) -> dict:
+    """Make a smaller parameter grid by selecting only a subset of parameters.
+
+    For example,
+    ```
+    >>> param_grid = {"alpha": [0.0005, 0.1, 1.0, 10.0], "fit_intercept": [True, False]}
+    >>> make_smaller_param_grid(param_grid, subset=2)
+    {'alpha': [0.0005, 0.1], 'fit_intercept': [True, False]}
+    ```
+
+    Parameters
+    ----------
+    param_grid : dict
+        The parameter grid to select a subset from.
+
+    Returns
+    -------
+    dict
+        A smaller parameter grid with a subset of parameters.
+    """
+    smaller_param_grid = {}
+    for key, value in param_grid.items():
+        if isinstance(value, list) and len(value) > subset - 1:
+            smaller_param_grid[key] = value[:subset]
+        else:
+            smaller_param_grid[key] = value
+    return smaller_param_grid
+
+
+def combine_param_grids(
+    param_grid_1: list[dict] | dict, param_grid_2: list[dict] | dict
+) -> list[dict] | dict:
+    """Combine two parameter grids into a single parameter grid."""
+    if isinstance(param_grid_1, list) and isinstance(param_grid_2, list):
+        combined_param_grids = []
+        for grid_1, grid_2 in zip(param_grid_1, param_grid_2):
+            combined_param_grids.append({**grid_1, **grid_2})
+    elif isinstance(param_grid_1, dict) and isinstance(param_grid_2, dict):
+        combined_param_grids = {**param_grid_1, **param_grid_2}
+    elif isinstance(param_grid_1, list) and isinstance(param_grid_2, dict):
+        combined_param_grids = []
+        for grid_1 in param_grid_1:
+            combined_param_grids.append({**grid_1, **param_grid_2})
+    elif isinstance(param_grid_1, dict) and isinstance(param_grid_2, list):
+        combined_param_grids = []
+        for grid_2 in param_grid_2:
+            combined_param_grids.append({**param_grid_1, **grid_2})
+
+    return combined_param_grids

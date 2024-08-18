@@ -11,6 +11,7 @@ from sklearn.decomposition import PCA, FastICA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, StandardScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import LabelEncoder
+from umap import UMAP
 
 from utils.config import CUPY_INSTALLED, OPENTSNE_INSTALLED, TSNE_CUDA_INSTALLED
 
@@ -159,11 +160,51 @@ def apply_ica(
 
     if isinstance(X, pd.DataFrame):
         X = X.to_numpy()
-    
+
     if standardize_first:
         pipeline = make_pipeline(
             StandardScaler(), FastICA(n_components=n_components, random_state=random_state)
         )
     else:
         pipeline = FastICA(n_components=n_components, random_state=random_state)
+    return pipeline.fit_transform(X)
+
+
+def apply_umap(
+    X: np.ndarray | pd.DataFrame,
+    n_components: int = 2,
+    standardize_first: bool = True,
+    **kwargs,
+) -> np.ndarray:
+    """Apply UMAP to reduce the dimensionality of the given high-dimensional array.
+
+    Parameters:
+    -----------
+    X : np.ndarray | pd.DataFrame
+        The input data to be transformed.
+    n_components : int, optional
+        Number of components to keep. Default is 2.
+    standardize_first : bool, optional
+        Whether to standardize the data before applying UMAP. Default is True.
+    **kwargs : dict
+        Additional keyword arguments for UMAP.
+
+    Returns:
+    --------
+    np.ndarray
+        The transformed data.
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.to_numpy()
+
+    umap = UMAP(
+        n_components=n_components,
+        **kwargs,
+    )
+
+    if standardize_first:
+        pipeline = make_pipeline(StandardScaler(), umap)
+    else:
+        pipeline = umap
+
     return pipeline.fit_transform(X)
