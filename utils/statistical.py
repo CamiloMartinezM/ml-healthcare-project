@@ -75,6 +75,11 @@ def plot_distribution_fits(
     figsize=None,
     titles: list[str] | None = None,
     style="default",
+    hist_fitted_color="r",
+    hist_fitted_linewidth=1,
+    hist_fitted_linestyle="--",
+    hist_legend_pos="best",
+    hist_fontsize="small",
     summary=True,
 ) -> None:
     """
@@ -160,8 +165,9 @@ def plot_distribution_fits(
             ax_hist.plot(
                 x_range,
                 dist.pdf(x_range, *params),
-                "r-",
-                lw=2,
+                color=hist_fitted_color,
+                linestyle=hist_fitted_linestyle,
+                lw=hist_fitted_linewidth,
                 label=f"Fitted {distribution.capitalize()}",
             )
             title = f"{distribution.capitalize()} Fit"
@@ -170,7 +176,7 @@ def plot_distribution_fits(
             title += " - Histogram"
             ax_hist.set_title(title)
             ax_hist.set_xlabel(safe(column))
-            ax_hist.legend()
+            ax_hist.legend(loc=hist_legend_pos, fontsize=hist_fontsize)
             col_start += 1
         else:
             dist = "norm"
@@ -398,7 +404,7 @@ def backward_elimination_f_test(
     return features
 
 
-def modified_z_score(data: pd.DataFrame, constant=1.486) -> pd.DataFrame:
+def modified_z_score(data: pd.DataFrame, column_name: str, constant=1.486) -> pd.Series:
     """Calculate the modified Z-score for the input dataframe `data`.
     Note: Common `constant` alternatives:
 
@@ -411,15 +417,18 @@ def modified_z_score(data: pd.DataFrame, constant=1.486) -> pd.DataFrame:
     A larger constant will make the method more conservative (detecting fewer outliers), while a
     smaller constant will make it more aggressive.
     """
-    median = data.median()
-    mad = np.abs(data - median).median()
-    # Avoid division by zero by setting all mad values to 1 if they are zero
-    mad[mad == 0] = 1
-    modified_z_scores = constant * (data - median) / mad
+    series = data[column_name]
+    median = series.median()
+    mad = np.abs(series - median).median()
+    # Avoid division by zero
+    mad = mad if mad != 0 else 1
+    modified_z_scores = constant * (series - median) / mad
     return modified_z_scores
 
 
-def iqr_outliers(data, factor=1.5, lower_percentile=25, uppper_percentile=75) -> pd.Series:
+def iqr_outliers(
+    data: pd.DataFrame, column_name: str, factor=1.5, lower_percentile=25, upper_percentile=75
+) -> pd.Series:
     """Detect outliers in the dataframe `data` using the IQR method with the specified `factor`.
     Note: The IQR method is based on the interquartile range, which is the range between the 25th
     and 75th percentiles of the data. The factor is a multiplier to control the range of the IQR
@@ -429,23 +438,24 @@ def iqr_outliers(data, factor=1.5, lower_percentile=25, uppper_percentile=75) ->
     For highly skewed data, consider using high percentiles (e.g., 99th or 99.9th) to flag potential
     outliers.
     """
-    Q1 = data.quantile(lower_percentile / 100)
-    Q3 = data.quantile(uppper_percentile / 100)
-    IQR = iqr(data, axis=0)
+    series = data[column_name]
+    Q1 = series.quantile(lower_percentile / 100)
+    Q3 = series.quantile(upper_percentile / 100)
+    IQR = Q3 - Q1
     lower_bound = Q1 - factor * IQR
     upper_bound = Q3 + factor * IQR
-    return ((data < lower_bound) | (data > upper_bound)).any(axis=1)
+    return (series < lower_bound) | (series > upper_bound)
 
 
 def detect_outliers(
     df: pd.DataFrame | np.ndarray,
+    column_name: str,
     method="z-score",
     z_score_threshold=3,
-    z_score_constant=0.6745,
+    z_score_constant=1.486,
     iqr_lower_percentile=1,
     iqr_upper_percentile=99,
     iqr_threshold=1.5,
-    exclude_cols=[],
 ) -> pd.Series:
     """Detect outliers in the input dataframe `df` using the specified `method` and defined thresholds.
 
@@ -477,28 +487,29 @@ def detect_outliers(
         df = pd.DataFrame(df)
 
     if method == "z-score":
-        z_scores = zscore(df)
-        outliers = (z_scores.abs() > z_score_threshold).any(axis=1)
+        z_scores = zscore(df[column_name])
+        outliers = np.abs(z_scores) > z_score_threshold
     elif method == "modified-z-score":
-        modified_z_scores = modified_z_score(df, constant=z_score_constant)
-        outliers = (modified_z_scores.abs() > z_score_threshold).any(axis=1)
+        modified_z_scores = modified_z_score(df, column_name, constant=z_score_constant)
+        outliers = np.abs(modified_z_scores) > z_score_threshold
     elif method == "iqr":
         outliers = iqr_outliers(
             df,
+            column_name,
             factor=iqr_threshold,
             lower_percentile=iqr_lower_percentile,
-            uppper_percentile=iqr_upper_percentile,
+            upper_percentile=iqr_upper_percentile,
         )
     elif method == "isolation-forest":
-        iso_forest = IsolationForest(max_features=df.shape[1])
+        iso_forest = IsolationForest()
         outlier_labels = iso_forest.fit_predict(df)
         outliers = outlier_labels == -1
     else:
         raise ValueError(
-            "Invalid outlier detection method. Choose from 'z-score', 'modified-z-score', or 'iqr'."
+            "Invalid outlier detection method. Choose from 'z-score', 'modified-z-score', 'iqr', or 'isolation-forest'."
         )
 
-    return outliers
+    return pd.Series(outliers, index=df.index)
 
 
 def detect_influentials(

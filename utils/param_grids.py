@@ -7,6 +7,8 @@ from itertools import product
 from typing import Any
 
 import numpy as np
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.svm import LinearSVC, LinearSVR, NuSVC, NuSVR
 from skopt.space import Categorical, Integer, Real
 
 
@@ -65,19 +67,17 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "alpha": [0.0005, 0.1, 1.0, 10.0],
                 "kernel": ["linear", "poly", "rbf"],
                 "degree": [2, 3],
-                "gamma": ["scale", "auto"],
             },
             "bayes": {
                 "alpha": Real(0.0001, 100, prior="log-uniform"),
                 "kernel": Categorical(["linear", "poly", "rbf"]),
                 "degree": Integer(2, 3),
-                "gamma": Categorical(["scale", "auto"]),
             },
         },
         "TweedieRegressor": {
             "grid": {
-                "power": np.linspace(1.0, 2.0, 10),
-                "alpha": np.logspace(-3, 1, 10),
+                "power": np.linspace(1.0, 2.0, 4),
+                "alpha": np.logspace(-3, 1, 4),
                 "link": ["log", "identity"],
                 "max_iter": [5000],
             },
@@ -150,6 +150,35 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "max_depth": Integer(3, 7),
             },
         },
+        "GradientBoostingClassifier": {
+            "grid": {
+                "n_estimators": [100, 300, 500],
+                "max_depth": [3, 5, 7],
+                "loss": ["log_loss", "exponential"],
+                "criterion": ["friedman_mse", "mse"],
+            },
+            "bayes": {
+                "n_estimators": Integer(100, 500),
+                "learning_rate": Real(0.01, 0.1, prior="log-uniform"),
+                "max_depth": Integer(3, 7),
+                "loss": Categorical(["log_loss", "exponential"]),
+                "criterion": Categorical(["friedman_mse", "mse"]),
+            },
+        },
+        "XGBClassifier": {
+            "grid": {
+                "n_estimators": [100, 300, 500],
+                "max_depth": [3, 5, 7],
+                "grow_policy": ["depthwise", "lossguide"],
+                "objective": ["binary:logistic"],
+            },
+            "bayes": {
+                "n_estimators":  Integer(100, 500),
+                "max_depth": Integer(3, 7),
+                "grow_policy": Categorical(["depthwise", "lossguide"]),
+                "objective": Categorical(["binary:logistic"]),
+            },
+        },
         "SVR": {
             "grid": {
                 "C": [0.1, 1, 10, 100],
@@ -179,52 +208,106 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "max_iter": 5000,
             },
         },
+        "NuSVR": {
+            "grid": {
+                "nu": [0.1, 0.5, 0.9],
+                "kernel": ["linear", "rbf", "poly"],
+                "gamma": [0.1, 1, "scale", "auto"],
+            },
+            "bayes": {
+                "nu": Real(0.1, 0.9),
+                "gamma": Real(0.01, 0.1, prior="log-uniform"),
+                "kernel": Categorical(["linear", "rbf", "poly"]),
+            },
+        },
         "SVC": {
             "grid": {
                 "C": [0.1, 1, 10, 100],
                 "kernel": ["linear", "rbf", "poly"],
                 "gamma": [0.1, 1, "scale", "auto"],
+                "class_weight": ["balanced"],
             },
             "bayes": {
                 "C": Real(0.1, 10, prior="log-uniform"),
                 "gamma": Real(0.01, 0.1, prior="log-uniform"),
                 "kernel": Categorical(["linear", "rbf", "poly"]),
                 "degree": Integer(2, 3),
+                "class_weight": Categorical(["balanced"]),
             },
         },
         "LinearSVC": {
-            "grid": {
-                "C": [0.1, 1, 10, 100],
-                "penalty": ["l1", "l2"],
-                "loss": ["hinge", "squared_hinge"],
-                "class_weight": ["balanced", None],
-                "fit_intercept": [True],
-                "max_iter": [5000],
-            },
+            "grid": [
+                {
+                    "C": [0.1, 1, 10, 100],
+                    "penalty": ["l1"],
+                    "loss": ["squared_hinge"],
+                    "class_weight": ["balanced"],
+                    "fit_intercept": [True],
+                    "max_iter": [5000],
+                },
+                {
+                    "C": [0.1, 1, 10, 100],
+                    "penalty": ["l2"],
+                    "loss": ["hinge", "squared_hinge"],
+                    "class_weight": ["balanced"],
+                    "fit_intercept": [True],
+                    "max_iter": [5000],
+                },
+            ],
             "bayes": {
                 "C": Real(0.1, 100, prior="log-uniform"),
                 "penalty": Categorical(["l1", "l2"]),
                 "loss": Categorical(["hinge", "squared_hinge"]),
-                "class_weight": Categorical(["balanced", None]),
+                "class_weight": Categorical(["balanced"]),
                 "fit_intercept": Categorical([True]),
                 "max_iter": 5000,
+            },
+        },
+        "NuSVC": {
+            "grid": {
+                "nu": [0.1, 0.5, 0.9],
+                "kernel": ["linear", "rbf", "poly"],
+                "gamma": [0.1, 1, "scale", "auto"],
+                "class_weight": ["balanced"],
+            },
+            "bayes": {
+                "nu": Real(0.1, 0.9),
+                "gamma": Real(0.01, 0.1, prior="log-uniform"),
+                "kernel": Categorical(["linear", "rbf", "poly"]),
+                "class_weight": Categorical(["balanced"]),
             },
         },
         "LogisticRegression": {
             "grid": [
                 {
-                    "penalty": ["l2"],  # lbfgs supports only l2 penalty
+                    "penalty": [None, "l2"],  # lbfgs supports only l2 penalty
                     "C": [0.1, 1, 10, 100],
                     "solver": ["lbfgs"],
+                    "dual": [False, True],
                     "class_weight": ["balanced", None],
+                    "intercept_scaling": [1, 10],
                     "max_iter": [5000],
+                    "tol": [1e-4],
                 },
                 {
                     "penalty": ["l1"],  # saga and liblinear support l1 penalty
                     "C": [0.1, 1, 10, 100],
                     "solver": ["liblinear"],
+                    "dual": [False, True],
                     "class_weight": ["balanced", None],
+                    "intercept_scaling": [1, 10],
                     "max_iter": [5000],
+                    "tol": [1e-4],
+                },
+                {
+                    "penalty": ["elasticnet"],
+                    "C": [0.1, 1, 10, 100],
+                    "l1_ratio": [0.2, 0.5, 0.75],
+                    "dual": [False, True],
+                    "class_weight": ["balanced", None],
+                    "intercept_scaling": [1, 10],
+                    "max_iter": [5000],
+                    "tol": [1e-4],
                 },
             ],
             "bayes": [
@@ -232,17 +315,85 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                     "penalty": Categorical(["l2"]),
                     "C": Real(0.1, 100, prior="log-uniform"),
                     "solver": Categorical(["lbfgs", "saga"]),
-                    "class_weight": Categorical(["balanced", None]),
+                    "class_weight": Categorical(["balanced"]),
                     "max_iter": 5000,
                 },
                 {
                     "penalty": Categorical(["l1"]),
                     "C": Real(0.1, 100, prior="log-uniform"),
                     "solver": Categorical(["liblinear", "saga"]),
-                    "class_weight": Categorical(["balanced", None]),
+                    "class_weight": Categorical(["balanced"]),
                     "max_iter": 5000,
                 },
             ],
+        },
+        "KNeighborsClassifier": {
+            "grid": {
+                "n_neighbors": [1, 3, 5, 7, 9],
+                "weights": ["uniform", "distance"],
+                "metric": ["cosine", "haversine", "minkowski"],
+            },
+            "bayes": {
+                "n_neighbors": Integer(3, 9),
+                "weights": Categorical(["uniform", "distance"]),
+                "metric": Categorical(["cosine", "haversine", "minkowski"]),
+            },
+        },
+        "RidgeClassifier": {
+            "grid": {
+                "alpha": [0.0005, 0.1, 1.0, 10.0],
+                "fit_intercept": [True, False],
+                "class_weight": ["balanced"],
+            },
+            "bayes": {
+                "alpha": Real(0.0001, 100, prior="log-uniform"),
+                "fit_intercept": Categorical([True, False]),
+                "class_weight": Categorical(["balanced"]),
+            },
+        },
+        "LinearDiscriminantAnalysis": {
+            "grid": {
+                "solver": ["svd", "lsqr", "eigen"],
+                "shrinkage": [None, "auto"],
+            },
+            "bayes": {
+                "solver": Categorical(["svd", "lsqr", "eigen"]),
+                "shrinkage": Categorical([None, "auto"]),
+            },
+        },
+        "QuadraticDiscriminantAnalysis": {
+            "grid": {
+                "reg_param": [0, 0.1, 0.5, 1.0],
+            },
+            "bayes": {
+                "reg_param": Real(0, 1, prior="uniform"),
+            },
+        },
+        "PassiveAggressiveClassifier": {
+            "grid": {
+                "C": [0.1, 1, 10, 100],
+                "fit_intercept": [True, False],
+                "max_iter": [5000],
+                "loss": ["hinge", "squared_hinge"],
+                "class_weight": ["balanced"],
+                "early_stopping": [True],
+            },
+            "bayes": {
+                "C": Real(0.1, 100, prior="log-uniform"),
+                "fit_intercept": Categorical([True, False]),
+                "max_iter": Categorical([5000]),
+                "loss": Categorical(["hinge", "squared_hinge"]),
+                "class_weight": Categorical(["balanced"]),
+                "early_stopping": Categorical([True]),
+            },
+        },
+        "GaussianNB": {
+            "grid": {
+                "var_smoothing": [1e-09],
+            },
+            "bayes": {
+                "var_smoothing": Real(1e-9, 1e-7, prior="log-uniform"),
+            },
         },
         "LGBMClassifier": {
             "grid": {
@@ -261,7 +412,7 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "alpha": [0.0001, 0.001, 0.01],
                 "penalty": ["l1", "l2", "elasticnet"],
                 "loss": ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"],
-                "class_weight": ["balanced", None],
+                "class_weight": ["balanced"],
                 "fit_intercept": [True],
                 "max_iter": [5000],
             },
@@ -271,7 +422,30 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "loss": Categorical(
                     ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"]
                 ),
-                "class_weight": Categorical(["balanced", None]),
+                "class_weight": Categorical(["balanced"]),
+                "fit_intercept": Categorical([True]),
+                "max_iter": Categorical([5000]),
+            },
+        },
+        "SGDRegressor": {
+            "grid": {
+                "alpha": [0.0001, 0.001, 0.01],
+                "penalty": ["l1", "l2", "elasticnet"],
+                "loss": [
+                    "squared_error",
+                    "huber",
+                    "epsilon_insensitive",
+                    "squared_epsilon_insensitive",
+                ],
+                "fit_intercept": [True],
+                "max_iter": [5000],
+            },
+            "bayes": {
+                "alpha": Real(1e-4, 1e-2, prior="log-uniform"),
+                "penalty": Categorical(["l1", "l2", "elasticnet"]),
+                "loss": Categorical(
+                    ["squared_loss", "huber", "epsilon_insensitive", "squared_epsilon_insensitive"]
+                ),
                 "fit_intercept": Categorical([True]),
                 "max_iter": Categorical([5000]),
             },
@@ -281,7 +455,7 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "alpha": [0.0001, 0.001, 0.01],
                 "penalty": ["l1", "l2", "elasticnet"],
                 "loss": ["hinge", "log", "squared_loss"],
-                "fit_intercept": [True, False],
+                "fit_intercept": [True],
                 "epochs": [1000, 5000],
             },
             "bayes": {
@@ -548,12 +722,23 @@ def make_smaller_param_grid(param_grid: dict, subset=2) -> dict:
     dict
         A smaller parameter grid with a subset of parameters.
     """
-    smaller_param_grid = {}
-    for key, value in param_grid.items():
-        if isinstance(value, list) and len(value) > subset - 1:
-            smaller_param_grid[key] = value[:subset]
-        else:
-            smaller_param_grid[key] = value
+
+    def smaller_dict(param_grid: dict) -> dict:
+        smaller_param_grid = {}
+        for key, value in param_grid.items():
+            if isinstance(value, list) and len(value) > subset - 1:
+                smaller_param_grid[key] = value[:subset]
+            else:
+                smaller_param_grid[key] = value
+        return smaller_param_grid
+
+    if isinstance(param_grid, list):
+        smaller_param_grid = []
+        for grid in param_grid:
+            smaller_param_grid.append(smaller_dict(grid))
+    elif isinstance(param_grid, dict):
+        smaller_param_grid = smaller_dict(param_grid)
+
     return smaller_param_grid
 
 
@@ -577,3 +762,119 @@ def combine_param_grids(
             combined_param_grids.append({**param_grid_1, **grid_2})
 
     return combined_param_grids
+
+
+def construct_param_grids_list(
+    base_param_grid: dict, key: str, use_bayes_search=False
+) -> list[list[dict]]:
+    """Construct a list of parameter grids for a given key in the base parameter grid. If the key
+    `"dimensionality_reduction"` is present in the base parameter grid, then the identity function
+    is added to the dimensionality reduction techniques to test if no reduction is better. Also,
+    the Nystroem kernel approximation is only applied to LinearSVC, NuSVC, LinearSVR, and NuSVR
+    models to simulate full SVC and SVR models with the kernel trick (which are not practical for
+    large datasets).
+
+    For example,
+    ```
+    >>> base_param_grid = {
+    ...     # Dimensionality reduction techniques
+    ...     "dimensionality_reduction": [
+    ...         PCA(),
+    ...         FastICA(),
+    ...     ],
+    ...     "dimensionality_reduction__n_components": [2, 10, 80, None],
+    ...     # Classifiers
+    ...     "regressor__regressor": [
+    ...         Lasso(),
+    ...         Ridge(),
+    ...         LinearSVR(),
+    ...     ],
+    ...     "nystroem": [Nystroem()],
+    ...     "nystroem__n_components": [2, 10, 80, 100],
+    ...     "nystroem__kernel": ["rbf", "poly", "sigmoid"],
+    ... }
+    >>> construct_param_grids_list(base_param_grid, "regressor__regressor")
+    ... [[{'dimensionality_reduction': [PCA(), FastICA()], # Dimensionality reduction techniques
+    ... 'dimensionality_reduction__n_components': [2, 10, 80, None],
+    ... 'regressor__regressor': [Lasso()],
+    ... # Other parameters for Lasso
+    ... },
+    ... {'dimensionality_reduction': [FunctionTransformer()], # Identity function
+    ... 'regressor__regressor': [Lasso()],
+    ... 'regressor__regressor__alpha': [0.0005, 0.1, 1.0, 10.0],
+    ... # Other parameters for Lasso
+    ... }
+    ... ...,
+    ... [{'dimensionality_reduction': [PCA(), FastICA()],
+    ... 'regressor__regressor': [LinearSVR()],
+    ... 'nystroem': [Nystroem()], # Nystroem kernel approximation (to simulate full SVR)
+    ... 'regressor__regressor__C': [0.1, 1, 10, 100],
+    ... # Other parameters for LinearSVR
+    ... },
+    ... ...
+    ... ]]
+    ```
+
+    Parameters
+    ----------
+    base_param_grid : dict
+        The base parameter grid to construct the parameter grids from. It should contain the
+        `key` parameter, which should be a list of models to construct the parameter grids for.
+    key : str
+        The key to construct the parameter grids for.
+    use_bayes_search : bool, optional
+        Whether to use Bayesian optimization or not, it is used inside the `choose_param_grid()`
+        function, by default False.
+
+    Returns
+    -------
+    list[list[dict]]
+        A list of parameter grids for the given key.
+    """
+    param_grids = []
+    for model in base_param_grid[key]:
+        clf_param_grid = choose_param_grid(
+            model, add_str_to_keys=key, grid_search_type="bayes" if use_bayes_search else "grid"
+        )
+        combined_param_grid = combine_param_grids(base_param_grid, clf_param_grid)
+        combined_param_grid = (
+            [combined_param_grid]
+            if not isinstance(combined_param_grid, list)
+            else combined_param_grid
+        )
+
+        # Fix list of models
+        for grid in combined_param_grid:
+            grid[key] = [model]
+
+            # Only apply Nystroem to LinearSVC and NuSVC
+            if (
+                isinstance(model, (LinearSVR, NuSVR, LinearSVC, NuSVC))
+                and "nystroem" in base_param_grid
+            ):
+                grid["nystroem"] = base_param_grid["nystroem"]
+                grid["nystroem__n_components"] = base_param_grid["nystroem__n_components"]
+                grid["nystroem__kernel"] = base_param_grid["nystroem__kernel"]
+            elif "nystroem" in grid:
+                del grid["nystroem"]
+                del grid["nystroem__n_components"]
+                del grid["nystroem__kernel"]
+
+        # Add the identity function to the dimensionality reduction to test if no reduction
+        # is better
+        if "dimensionality_reduction" in grid:
+            extended_combined_param_grid = []
+            for grid in combined_param_grid:
+                identity_func_grid = grid.copy()
+                identity_func_grid["dimensionality_reduction"] = [FunctionTransformer(func=None)]
+                if "dimensionality_reduction__n_components" in identity_func_grid:
+                    del identity_func_grid["dimensionality_reduction__n_components"]
+
+                extended_combined_param_grid.append(grid)
+                extended_combined_param_grid.append(identity_func_grid)
+
+            param_grids.append(extended_combined_param_grid)
+        else:
+            param_grids.append(combined_param_grid)
+
+    return param_grids

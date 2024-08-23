@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 from scipy.stats import skew
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.exceptions import NotFittedError
 from sklearn.preprocessing import PolynomialFeatures
+from sklearn.utils.validation import check_is_fitted
 
 from utils.helpers import categorical_and_numerical_columns
 
@@ -18,34 +20,50 @@ class FeatureSetDecider(BaseEstimator, TransformerMixin):
         self.kwargs = kwargs
         self.output_type_ = "default"
 
-    def fit(self, x: pd.DataFrame, y: pd.DataFrame = None):
+        self.original_cols = None
+        self.categorical_cols = None
+        self.numerical_cols = None
+        self.skewed_cols = None
+        self.non_skewed_cols = None
+
+        # Custom attribute to track if the estimator is fitted
+        self._is_fitted = True
+
+    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.DataFrame = None):
+        X = self.__check_X(X)
+        self.original_cols = X.columns
         self.categorical_cols, self.numerical_cols = categorical_and_numerical_columns(
-            x, log=False, **self.kwargs
+            X, log=False, **self.kwargs
         )
         if self.mode in ["skewed", "non_skewed"]:
-            self.skewed_cols = self._get_skewed_columns(x[self.numerical_cols])
+            self.skewed_cols = self._get_skewed_columns(X[self.numerical_cols])
             self.non_skewed_cols = [
                 col for col in self.numerical_cols if col not in self.skewed_cols
             ]
+        self._is_fitted = True
         return self
 
-    def transform(self, x: pd.DataFrame, y: pd.DataFrame = None):
+    def transform(self, X: pd.DataFrame, y: pd.DataFrame = None):
+        check_is_fitted(self)
+
+        X = self.__check_X(X)
         if self.mode == "categorical":
-            result = x[self.categorical_cols]
+            result = X[self.categorical_cols]
         elif self.mode == "numerical":
-            result = x[self.numerical_cols]
+            result = X[self.numerical_cols]
         elif self.mode == "skewed":
-            result = x[self.skewed_cols]
+            result = X[self.skewed_cols]
         else:  # non_skewed
-            result = x[self.non_skewed_cols]
+            result = X[self.non_skewed_cols]
 
         if self.output_type_ == "pandas" or self.output_type_ == "default":
             return result
         else:
             return result.to_numpy()
 
-    def _get_skewed_columns(self, df):
-        skewed_feats = df.apply(lambda x: skew(x.dropna())).sort_values(ascending=False)
+    def _get_skewed_columns(self, df: pd.DataFrame) -> list[str]:
+        df_copy = df.copy()
+        skewed_feats = df_copy.apply(lambda x: skew(x.dropna())).sort_values(ascending=False)
         skewed_cols = skewed_feats[abs(skewed_feats) > self.skew_threshold].index.tolist()
         return skewed_cols
 
@@ -77,6 +95,30 @@ class FeatureSetDecider(BaseEstimator, TransformerMixin):
         if transform is not None:
             self.output_type_ = transform
         return self
+
+    def __check_X(self, X: pd.DataFrame | np.ndarray) -> tuple[np.ndarray, list[str]]:
+        """Check if input is a pandas DataFrame or numpy ndarray and convert to Pandas DataFrame if
+        necessary."""
+        if not isinstance(X, (pd.DataFrame, np.ndarray)):
+            raise TypeError("Input must be a pandas DataFrame or numpy ndarray.")
+
+        if X.shape[0] == 0:
+            raise ValueError("X has no samples.")
+
+        if isinstance(X, np.ndarray) and len(X.shape) == 1:
+            X = X.reshape(-1, 1)
+
+        if isinstance(X, np.ndarray):
+            if self.__sklearn_is_fitted__():
+                X = pd.DataFrame(X, columns=self.original_cols)
+            else:
+                X = pd.DataFrame(X, columns=[f"x{i}" for i in range(X.shape[1])])
+
+        return X
+
+    def __sklearn_is_fitted__(self):
+        """Check fitted status and return a Boolean value."""
+        return hasattr(self, "_is_fitted") and self._is_fitted
 
 
 class ColumnExtractor(BaseEstimator, TransformerMixin):
@@ -161,33 +203,68 @@ class PolynomialColumnTransformer(BaseEstimator, TransformerMixin):
         self.poly = PolynomialFeatures(
             degree=degree, interaction_only=interaction_only, include_bias=include_bias
         )
+        self.output_type_ = "default"
+
+        self.original_cols_names = None
+        self.poly_col_names = None
+        self.rest_col_names = None
 
     def fit(self, X, y=None):
-        X = self.__check_X(X)
+        X, self.original_cols_names = self.__check_X(X)
         if self.n_dimensions is not None:
-            X_subset = X[:, : min(self.n_dimensions, X.shape[1])]
+            self.n_dimensions = min(self.n_dimensions, X.shape[1])
+            X_subset = X[:, : self.n_dimensions]
+            self.poly_col_names = self.original_cols_names[: self.n_dimensions]
+            self.rest_col_names = self.original_cols_names[self.n_dimensions :]
         else:
             X_subset = X
-        self.poly.fit(X_subset)
+            self.poly_col_names = self.original_cols_names
+            self.rest_col_names = []
+
+        self.poly.fit(pd.DataFrame(X_subset, columns=self.poly_col_names))
+
+        # Custom attribute to track if the estimator is fitted
+        self._is_fitted = True
         return self
 
     def transform(self, X):
-        X = self.__check_X(X)
+        X, _ = self.__check_X(X)
         if self.n_dimensions is not None:
-            X_subset = X[:, : min(self.n_dimensions, X.shape[1])]
-            X_rest = X[:, min(self.n_dimensions, X.shape[1]) :]
-            X_poly = self.poly.transform(X_subset)
-            return np.hstack((X_poly, X_rest))
+            X_subset = X[:, : self.n_dimensions]
+            X_poly = self.__poly_transform(X_subset)
+            if self.rest_col_names is not None and len(self.rest_col_names) > 0:
+                X_rest = X[:, self.n_dimensions :]
+                X_rest = pd.DataFrame(X_rest, columns=self.rest_col_names)
+                result = pd.concat([X_poly, X_rest], axis=1)
+            else:
+                result = X_poly
         else:
-            return self.poly.transform(X)
+            X_poly = self.__poly_transform(X)
+            result = X_poly
+
+        if self.output_type_ == "pandas":
+            return result
+        else:
+            return result.to_numpy()
 
     def fit_transform(self, X, y=None):
         self.fit(X, y)
         return self.transform(X)
 
+    def __poly_transform(self, X):
+        X, _ = self.__check_X(X)
+        X_transformed = self.poly.transform(pd.DataFrame(X, columns=self.poly_col_names))
+        return pd.DataFrame(
+            X_transformed, columns=self.__poly_get_feature_names_out(self.poly_col_names)
+        )
+
+    def __poly_get_feature_names_out(self, input_features=None):
+        poly_features = self.poly.get_feature_names_out(input_features)
+        return poly_features
+
     def get_feature_names_out(self, input_features=None):
         if input_features is None:
-            input_features = [f"x{i}" for i in range(self.n_dimensions or self.poly.n_features_in_)]
+            input_features = self.original_cols_names
 
         poly_features = self.poly.get_feature_names_out(input_features[: self.n_dimensions])
 
@@ -219,10 +296,38 @@ class PolynomialColumnTransformer(BaseEstimator, TransformerMixin):
 
         return self
 
-    def __check_X(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
-        """Check if input is a pandas DataFrame or numpy ndarray and convert if necessary."""
+    def set_output(self, *, transform=None):
+        if transform is not None:
+            self.output_type_ = transform
+        return self
+
+    def __check_X(self, X: pd.DataFrame | np.ndarray) -> tuple[np.ndarray, list[str]]:
+        """Check if input is a pandas DataFrame or numpy ndarray and convert if necessary. It also
+        checks if the input columns match the original columns used to fit the transformer, if it's
+        fitted. And returns the input features along with the transformed input."""
+        # If it's fitted, check that the input columns match the original columns
+        if self.__sklearn_is_fitted__():
+            if isinstance(X, pd.DataFrame):
+                assert set(X.columns) == set(
+                    self.original_cols_names
+                ), "Columns do not match the original columns used to fit the transformer."
+
+        if X.shape[0] == 0:
+            raise ValueError("X has no samples.")
+
+        input_features = None
         if isinstance(X, pd.DataFrame):
+            input_features = X.columns
             X = X.values
+
         if len(X.shape) == 1:
             X = X.reshape(-1, 1)
-        return X
+
+        if input_features is None:
+            input_features = [f"x{i}" for i in range(X.shape[1])]
+
+        return X, input_features
+
+    def __sklearn_is_fitted__(self):
+        """Check fitted status and return a Boolean value."""
+        return hasattr(self, "_is_fitted") and self._is_fitted

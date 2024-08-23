@@ -3,11 +3,10 @@
 # File: utils/metrics.py
 # Description: This file defines the custom metrics to be used for model evaluation.
 
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import sklearn.metrics as skm
-from param import output
 
 from utils.config import CUPY_INSTALLED
 
@@ -65,9 +64,24 @@ def r2_score(y_true, y_pred) -> float:
     return skm.r2_score(y_true, y_pred)
 
 
-def compute_scores(y_true: np.ndarray, y_pred: np.ndarray) -> tuple:
+def compute_scores(
+    y_true: np.ndarray, y_pred: np.ndarray, as_dict=False
+) -> tuple | dict[str, float]:
     """Returns RMSE, MAE, Median SE, Median AE, and R^2 scores for the given true and predicted
-    values, in that order."""
+    values, in that order.
+
+    Parameters
+    ----------
+    y_true, y_pred : np.ndarray
+        The true and predicted values.
+    as_dict : bool, optional
+        Whether to return the scores as a dictionary. Default is `False`.
+
+    Returns
+    -------
+    tuple | dict[str, float]
+        A tuple of scores or a dictionary of scores, depending on the value of `as_dict`.
+    """
     rmse_value = rmse(y_true, y_pred)
     mae = mean_absolute_error(y_true, y_pred)
 
@@ -80,6 +94,17 @@ def compute_scores(y_true: np.ndarray, y_pred: np.ndarray) -> tuple:
 
     # R^2 score
     r2 = r2_score(y_true, y_pred)
+
+    if as_dict:
+        # Must follow the convention of utils.scorers.reg_scoring_metrics
+        result = {
+            "RMSE": rmse_value,
+            "MAE": mae,
+            "RMedSE": medse,
+            "MedAE": medae,
+            "R^2": r2,
+        }
+        return result
 
     return rmse_value, mae, medse, medae, r2
 
@@ -125,13 +150,13 @@ def classification_report(
         return metrics
 
 
-def get_metric_comparators(scoring_dict: dict) -> dict:
+def get_metric_comparators(scoring_dict: dict | str) -> dict | Callable:
     """Create a dictionary of metrics with their comparison functions, such that the function
     returns `True` if the first value is better than the second value.
 
     Parameters
     ----------
-    scoring_dict : dict
+    scoring_dict : dict | str
         Dictionary of metric names and their scikit-learn scoring function names. For example,
         ```
         {
@@ -141,10 +166,11 @@ def get_metric_comparators(scoring_dict: dict) -> dict:
             ...
         }
         ```
+        If a string is provided, it is assumed to be the name of a single metric.
 
     Returns
     -------
-    dict
+    dict | callable
         Dictionary of metrics with their comparison functions. For example,
         ```
         {
@@ -153,7 +179,14 @@ def get_metric_comparators(scoring_dict: dict) -> dict:
             "neg_mean_squared_error": lambda x, y: x < y, # Because lower values are better
             ...
         }
+        ```
+        If a single metric name is provided, the function returns a single comparison function.
     """
+    was_str = False
+    if isinstance(scoring_dict, str):
+        scoring_dict = {scoring_dict: scoring_dict}
+        was_str = True
+
     metric_comparators = {}
     for metric, scorer in scoring_dict.items():
         # Check if the metric name starts with 'neg_'
@@ -167,4 +200,44 @@ def get_metric_comparators(scoring_dict: dict) -> dict:
             # For any other metrics, assume higher values are better
             metric_comparators[metric] = lambda x, y: x > y
 
-    return metric_comparators
+    return metric_comparators if not was_str else metric_comparators[list(scoring_dict.keys())[0]]
+
+
+def find_closest_roc_point(
+    classifier: Any, X_test: np.ndarray, y_test: np.ndarray, recall: float
+) -> tuple:
+    """Find the closest point on the ROC curve to the given recall value.
+
+    Parameters
+    ----------
+    classifier : Any
+        The trained classifier model with a `predict_proba` or `decision_function` method.
+    X_test, y_test : np.ndarray
+        The test data and labels.
+    recall : float
+        The recall value to find the closest point to the ROC curve.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the FPR and TPR values of the closest point on the ROC curve.
+    """
+    if hasattr(classifier, "predict_proba"):
+        y_scores = classifier.predict_proba(X_test)[:, 1]
+    else:
+        y_scores = classifier.decision_function(X_test)
+    fpr, tpr, _ = skm.roc_curve(y_test, y_scores)
+
+    # Find the closest point on the ROC curve
+    # FPR = 1 - TNR and TNR = specificity
+    # FNR = 1 - TPR and TPR = recall
+    # See: https://stackoverflow.com/questions/56203875/how-to-compute-false-positive-rate-fpr-and-false-negative-rate-percantage
+    default_fpr = 1 - recall
+    default_tpr = recall
+
+    # Calculate distances to all points on the ROC curve
+    distances = np.sqrt((fpr - default_fpr) ** 2 + (tpr - default_tpr) ** 2)
+
+    # Find the index of the closest point
+    closest_index = np.argmin(distances)
+    return fpr[closest_index], tpr[closest_index]

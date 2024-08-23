@@ -4,23 +4,36 @@
 # Description: This file defines various plotting functions to visualize the data and model results.
 
 import math
-import random
-import warnings
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from adjustText import adjust_text
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
-from sklearn.metrics import PredictionErrorDisplay
+from sklearn.metrics import (
+    PrecisionRecallDisplay,
+    PredictionErrorDisplay,
+    RocCurveDisplay,
+    precision_score,
+    recall_score,
+    roc_curve,
+)
 
 from utils.config import DPI
 from utils.dimensionality_reduction import apply_ica, apply_lda, apply_pca, apply_tsne, apply_umap
-from utils.helpers import categorical_and_numerical_columns, safe_latex_context
+from utils.helpers import (
+    categorical_and_numerical_columns,
+    get_different_colors_from_plt_prop_cycle,
+    safe_latex_context,
+)
 from utils.logger import logger
-
+from utils.metrics import find_closest_roc_point
+from sklearn.metrics import PrecisionRecallDisplay, RocCurveDisplay
+from utils import scorers 
 
 class MetricPlot:
     """A class to create a line plot with multiple axes."""
@@ -101,7 +114,9 @@ class MetricPlot:
         figsize=(20, 10),
         title="",
         xlabel="",
+        annotate_values=False,
         xtick_rotation=0,
+        xtick_size=10,
         grid=True,
         legend_loc="best",
         style="default",
@@ -110,7 +125,7 @@ class MetricPlot:
         save_path=None,
         save_format="svg",
         show=True,
-        dpi=300,
+        dpi=DPI,
     ) -> None:
         with plt.style.context(style):
             fig, ax_main = plt.subplots(figsize=figsize, dpi=dpi, constrained_layout=True)
@@ -140,6 +155,7 @@ class MetricPlot:
                 color_dict = dict(zip(unique_sets, colors))
                 marker_dict = dict(zip(unique_metrics, ["o", "s", "^", "D", "v", "<", ">"]))
 
+            texts = []
             for i, (axis_name, axis_data) in enumerate(self.axes.items()):
                 ax = ax_main if i == 0 else ax_main.twinx()
 
@@ -176,6 +192,13 @@ class MetricPlot:
                         label=f"{entry['set_name']} - {entry['metric_name']}",
                         markersize=2,
                     )
+
+                    # Add annotations of each point
+                    if annotate_values:
+                        for x, y in zip(x_data, y_data):
+                            texts.append(
+                                ax.text(x, y, f"{y:.3f}", fontsize=6, color=color, alpha=0.7)
+                            )
 
                     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
                     ax.tick_params(
@@ -214,7 +237,12 @@ class MetricPlot:
             ax_main.xaxis.set_minor_locator(plt.NullLocator())
 
             # Rotate x-axis labels
-            plt.setp(ax_main.get_xticklabels(), rotation=xtick_rotation)
+            plt.setp(
+                ax_main.get_xticklabels(),
+                rotation=xtick_rotation,
+                ha="right" if abs(xtick_rotation) > 0 else "center",
+                size=xtick_size,
+            )
 
             # Add grid
             if grid:
@@ -235,7 +263,8 @@ class MetricPlot:
                         marker=marker_dict[metric],
                         label="-".join(word.capitalize() for word in metric.split("-")),
                     )
-                    for metric in unique_metrics if len(unique_metrics) > 1
+                    for metric in unique_metrics
+                    if len(unique_metrics) > 1
                 ]
             else:
                 legend_elements = [
@@ -254,13 +283,18 @@ class MetricPlot:
                         facecolor=color_dict[metric],
                         label="-".join(word.capitalize() for word in metric.split("-")),
                     )
-                    for metric in unique_metrics if len(unique_metrics) > 1
+                    for metric in unique_metrics
+                    if len(unique_metrics) > 1
                 ]
 
             ax_main.legend(
                 handles=legend_elements,
                 loc=legend_loc,
             )
+
+            # Apply adjustText to avoid overlapping
+            if annotate_values:
+                adjust_text(texts, arrowprops=dict(arrowstyle="->", color="red", lw=0.5))
 
             # Adjust layout
             fig.tight_layout()
@@ -292,6 +326,7 @@ def plot_features_vs_target(
     categorical_legend=None,
     x_log_scale=False,
     y_log_scale=False,
+    dpi=DPI,
 ) -> None:
     """
     Plots the relationship between the target and the features in the DataFrame.
@@ -350,7 +385,7 @@ def plot_features_vs_target(
     with plt.style.context(style), safe_latex_context() as safe:
         plt.rc("font", family="serif")
 
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=DPI, constrained_layout=True)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=dpi, constrained_layout=True)
         if n_rows == 1 and n_cols == 1:
             axes = np.array([[axes]])
         elif n_rows == 1 or n_cols == 1:
@@ -410,6 +445,7 @@ def scatter_plot(
     ylabel="y",
     zlabel="z",
     figsize=(6, 4),
+    dpi=DPI,
 ) -> None:
     """Scatter plot for dimensionality reduced data.
 
@@ -435,7 +471,7 @@ def scatter_plot(
         style = "default"
 
     with plt.style.context(style), safe_latex_context() as safe:
-        fig = plt.figure(figsize=figsize, dpi=DPI)
+        fig = plt.figure(figsize=figsize, dpi=dpi)
         num_axes = X.shape[1]
 
         if num_axes not in [1, 2, 3]:
@@ -585,7 +621,7 @@ def regression_performance_comparison(
 
     with plt.style.context(style):
         f, (ax0, ax1) = plt.subplots(
-            2, ncols, sharey="row", figsize=(10, 8), constrained_layout=True
+            2, ncols, sharey="row", figsize=(8, 6), constrained_layout=True
         )
 
         # plot the actual vs predicted values
@@ -608,13 +644,14 @@ def regression_performance_comparison(
         # Add the score in the legend of each axis
         if metrics:
             for i, (ax, scores) in enumerate(
-                zip([ax0[0], ax0[1]], [metrics[0].values, metrics[1].values])
+                zip([ax0[0], ax0[1]], [list(metrics[0].values()), list(metrics[1].values())])
             ):
-                for name, score in zip([metrics[i].keys()], scores):
+                for name, score in zip(list(metrics[i].keys()), scores):
                     ax.plot([], [], " ", label=f"{name} = {score}")
-            ax.legend(loc="upper left")
+                ax.legend(loc="upper left")
 
         prev = regressor_name + "\n" if regressor_name is not None else ""
+        ax0[0].set_title(f"{prev.strip()}")
         ax0[1].set_title(f"{prev}With $y$ transformed")
         ax0[0].set_xlabel("")
         ax0[1].set_xlabel("")
@@ -641,3 +678,307 @@ def regression_performance_comparison(
         f.tight_layout()
         plt.show()
         plt.close()
+
+
+# def plot_pr_roc_curves(
+#     classifier: Any,
+#     X_test: np.ndarray,
+#     y_test: np.ndarray,
+#     clf_name=None,
+#     figsize=(6, 4),
+#     style="default",
+#     exclude_colors=["k", "r"],
+#     show=True,
+#     dpi=DPI,
+# ) -> None:
+#     """See: https://scikit-learn.org/stable/auto_examples/model_selection/plot_cost_sensitive_learning.html#sphx-glr-auto-examples-model-selection-plot-cost-sensitive-learning-py
+
+#     Parameters
+#     ----------
+#     classifier : Any
+#         A trained classifier with a `predict` method.
+#     X_test, y_test : np.ndarray
+#         The test data and labels.
+#     clf_name : _type_, optional
+#         The name of the classifier, it will be used in the legend, by default None
+#     figsize : tuple, optional
+#         The figure size, by default (6, 4)
+#     style : str, optional
+#         The plot style to use, by default "default"
+#     exclude_colors : list, optional
+#         A list of colors to exclude from the plot, by default ["k", "r"]
+#     show : bool, optional
+#         Whether to show the plot, by default True
+#     dpi : _type_, optional
+#         The dots per inch (DPI) for the plot, by default DPI
+#     """
+#     with plt.style.context(style):
+#         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, constrained_layout=True, dpi=dpi)
+
+#         # Grab the next color that is not in the exclude_colors list
+#         colors = get_different_colors_from_plt_prop_cycle(
+#             2, exclude_colors=exclude_colors, style=style
+#         )
+#         color, marker_color = colors[0], colors[1]
+
+#         PrecisionRecallDisplay.from_estimator(
+#             classifier,
+#             X_test,
+#             y_test,
+#             name=classifier.__class__.__name__ if clf_name is None else clf_name,
+#             plot_chance_level=True,
+#             ax=ax1,
+#             color=color,
+#         )
+
+#         recall_value_at_default_cutoff = recall_score(y_test, classifier.predict(X_test))
+#         precision_value_at_default_cutoff = precision_score(y_test, classifier.predict(X_test))
+#         ax1.plot(
+#             recall_value_at_default_cutoff,
+#             precision_value_at_default_cutoff,
+#             marker="o",
+#             markersize=5,
+#             color=marker_color,
+#             label="Default cut-off point ($p=0.5$)",
+#         )
+
+#         RocCurveDisplay.from_estimator(
+#             classifier,
+#             X_test,
+#             y_test,
+#             name=classifier.__class__.__name__ if clf_name is None else clf_name,
+#             plot_chance_level=True,
+#             ax=ax2,
+#             color=color,
+#         )
+
+#         fpr_value_at_default_cutoff, tpr_value_at_default_cutoff = find_closest_roc_point(
+#             classifier, X_test, y_test, recall_value_at_default_cutoff
+#         )
+
+#         # Plot the closest point
+#         ax2.plot(
+#             fpr_value_at_default_cutoff,
+#             tpr_value_at_default_cutoff,
+#             marker="o",
+#             markersize=5,
+#             color=marker_color,
+#             label="Default cut-off point ($p=0.5$)",
+#         )
+
+#         ax1.legend()
+#         ax2.legend()
+
+#         ax1.set_title("Precision-Recall Curve")
+#         ax2.set_title("ROC Curve")
+
+#         fig.tight_layout()
+#         if show:
+#             plt.show()
+#         plt.close(fig)
+
+# def plot_roc_pr_curves(vanilla_model, tuned_model, X_test, y_test, *, title, pos_label=1):
+#     fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(21, 6))
+
+#     linestyles = ("dashed", "dotted")
+#     markerstyles = ("o", ">")
+#     colors = ("tab:blue", "tab:orange")
+#     names = ("Vanilla GBDT", "Tuned GBDT")
+#     for idx, (est, linestyle, marker, color, name) in enumerate(
+#         zip((vanilla_model, tuned_model), linestyles, markerstyles, colors, names)
+#     ):
+#         decision_threshold = getattr(est, "best_threshold_", 0.5)
+#         PrecisionRecallDisplay.from_estimator(
+#             est,
+#             X_test,
+#             y_test,
+#             pos_label=pos_label,
+#             linestyle=linestyle,
+#             color=color,
+#             ax=axs[0],
+#             name=name,
+#         )
+#         axs[0].plot(
+#             scorers.clf_scorers["recall"](est, X_test, y_test),
+#             scorers.clf_scorers["precision"](est, X_test, y_test),
+#             marker,
+#             markersize=10,
+#             color=color,
+#             label=f"Cut-off point at probability of {decision_threshold:.2f}",
+#         )
+#         RocCurveDisplay.from_estimator(
+#             est,
+#             X_test,
+#             y_test,
+#             pos_label=pos_label,
+#             linestyle=linestyle,
+#             color=color,
+#             ax=axs[1],
+#             name=name,
+#             plot_chance_level=idx == 1,
+#         )
+#         axs[1].plot(
+#             scorers.clf_scorers["fpr"](est, X_test, y_test),
+#             scorers.clf_scorers["tpr"](est, X_test, y_test),
+#             marker,
+#             markersize=10,
+#             color=color,
+#             label=f"Cut-off point at probability of {decision_threshold:.2f}",
+#         )
+
+#     axs[0].set_title("Precision-Recall curve")
+#     axs[0].legend()
+#     axs[1].set_title("ROC curve")
+#     axs[1].legend()
+
+#     axs[2].plot(
+#         tuned_model.cv_results_["thresholds"],
+#         tuned_model.cv_results_["scores"],
+#         color="tab:orange",
+#     )
+#     axs[2].plot(
+#         tuned_model.best_threshold_,
+#         tuned_model.best_score_,
+#         "o",
+#         markersize=10,
+#         color="tab:orange",
+#         label="Optimal cut-off point for the business metric",
+#     )
+#     axs[2].legend()
+#     axs[2].set_xlabel("Decision threshold (probability)")
+#     axs[2].set_ylabel("Objective score (using cost-matrix)")
+#     axs[2].set_title("Objective score as a function of the decision threshold")
+#     fig.suptitle(title)
+
+#     plt.show()
+#     plt.close(fig)
+
+def plot_pr_roc_curves(
+    classifier: Any,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    tuned_model: Any | None = None,
+    clf_name: str | None = None,
+    figsize=None,
+    style = "default",
+    suptitle: str | None =None,
+    exclude_colors: list[str] = ["k", "r"],
+    show_objective_score: bool = False,
+    show: bool = True,
+    dpi: int = DPI,
+    pos_label: int = 1,
+) -> None:
+    """
+    Plot PR and ROC curves for a classifier, with optional tuned model comparison and objective score plot.
+
+    Parameters:
+    -----------
+    classifier : Any
+        A trained classifier with a `predict` method.
+    X_test, y_test : np.ndarray
+        The test data and labels.
+    tuned_model : Optional[Any], default=None
+        A tuned model (e.g., TunedThresholdClassifier) to compare with the vanilla classifier.
+    clf_name : str | None, default=None
+        The name of the classifier to use in the legend.
+    figsize : Tuple[int, int], default=(6, 4)
+        The figure size.
+    style : str, default="default"
+        The plot style to use.
+    exclude_colors : List[str], default=["k", "r"]
+        A list of colors to exclude from the plot.
+    show_objective_score : bool, default=False
+        Whether to plot the objective score as a function of the decision threshold.
+    show : bool, default=True
+        Whether to show the plot.
+    dpi : int, default=DPI
+        The dots per inch (DPI) for the plot.
+    pos_label : int, default=1
+        The label of the positive class.
+    """
+    if show_objective_score and not figsize:
+        figsize = (12, 6)
+    elif not figsize:
+        figsize = (7, 4)
+
+    with plt.style.context(style):
+        n_cols = 3 if show_objective_score and tuned_model is not None else 2
+        fig, axs = plt.subplots(1, n_cols, figsize=figsize, constrained_layout=True, dpi=dpi, sharey="row")
+
+        colors = get_different_colors_from_plt_prop_cycle(2, exclude_colors=exclude_colors, style=style)
+        linestyles = ("solid", "dashed")
+        markerstyles = ("o", "^")
+        names = (clf_name or classifier.__class__.__name__, f"Tuned {clf_name or classifier.__class__.__name__}")
+
+        for idx, (model, linestyle, marker, color, name) in enumerate(
+            zip((classifier, tuned_model), linestyles, markerstyles, colors, names)
+        ):
+            if model is None:
+                continue
+
+            decision_threshold = getattr(model, "best_threshold_", 0.5)
+            
+            # Precision-Recall curve
+            PrecisionRecallDisplay.from_estimator(
+                model, X_test, y_test,
+                pos_label=pos_label,
+                linestyle=linestyle,
+                color=color,
+                ax=axs[0],
+                name=name,
+            )
+            axs[0].plot(
+                scorers.clf_scorers["recall"](model, X_test, y_test),
+                scorers.clf_scorers["precision"](model, X_test, y_test),
+                marker, markersize=5, color=color,
+                label=f"Cut-off point at probability of {decision_threshold:.2f}"
+            )
+
+            # ROC curve
+            RocCurveDisplay.from_estimator(
+                model, X_test, y_test,
+                pos_label=pos_label,
+                linestyle=linestyle,
+                color=color,
+                ax=axs[1],
+                name=name,
+                plot_chance_level=idx == 0,
+            )
+            axs[1].plot(
+                scorers.clf_scorers["fpr"](model, X_test, y_test),
+                scorers.clf_scorers["tpr"](model, X_test, y_test),
+                marker, markersize=5, color=color,
+                label=f"Cut-off point at probability of {decision_threshold:.2f}"
+            )
+
+        axs[0].set_title("Precision-Recall Curve")
+        axs[0].legend()
+        axs[1].set_title("ROC Curve")
+        axs[1].legend()
+
+        if show_objective_score and tuned_model is not None and hasattr(tuned_model, 'cv_results_'):
+            axs[2].plot(
+                tuned_model.cv_results_["thresholds"],
+                tuned_model.cv_results_["scores"],
+                color=colors[1],
+            )
+            axs[2].plot(
+                tuned_model.best_threshold_,
+                tuned_model.best_score_,
+                "o", markersize=5, color=colors[1],
+                label="Optimal cut-off point for the business metric",
+            )
+            axs[2].legend()
+            axs[2].set_xlabel("Decision threshold (probability)")
+            axs[2].set_ylabel("Objective score (using cost-matrix)")
+            axs[2].set_title("Objective score")
+
+        if suptitle:
+            # f"Performance curves for {clf_name or classifier.__class__.__name__}"
+            fig.suptitle(suptitle)
+        
+        fig.tight_layout()
+        
+        if show:
+            plt.show()
+        plt.close(fig)

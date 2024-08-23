@@ -1,0 +1,326 @@
+{
+  "name": "XGBClassifier",
+  "param_grid": [
+    {
+      "classifier": [
+        "XGBClassifier(base_score=None, booster=None, callbacks=None,\n              colsample_bylevel=None, colsample_bynode=None,\n              colsample_bytree=None, device=None, early_stopping_rounds=None,\n              enable_categorical=False, eval_metric=None, feature_types=None,\n              gamma=None, grow_policy=None, importance_type=None,\n              interaction_constraints=None, learning_rate=None, max_bin=None,\n              max_cat_threshold=None, max_cat_to_onehot=None,\n              max_delta_step=None, max_depth=None, max_leaves=None,\n              min_child_weight=None, missing=nan, monotone_constraints=None,\n              multi_strategy=None, n_estimators=None, n_jobs=None,\n              num_parallel_tree=None, random_state=None, ...)"
+      ],
+      "classifier__n_estimators": [
+        100
+      ],
+      "classifier__max_depth": [
+        3
+      ],
+      "classifier__grow_policy": [
+        "depthwise"
+      ],
+      "classifier__objective": [
+        "binary:logistic"
+      ]
+    }
+  ],
+  "best_index": "0",
+  "best_params": {
+    "classifier": "XGBClassifier(base_score=None, booster=None, callbacks=None,\n              colsample_bylevel=None, colsample_bynode=None,\n              colsample_bytree=None, device=None, early_stopping_rounds=None,\n              enable_categorical=False, eval_metric=None, feature_types=None,\n              gamma=None, grow_policy=None, importance_type=None,\n              interaction_constraints=None, learning_rate=None, max_bin=None,\n              max_cat_threshold=None, max_cat_to_onehot=None,\n              max_delta_step=None, max_depth=None, max_leaves=None,\n              min_child_weight=None, missing=nan, monotone_constraints=None,\n              multi_strategy=None, n_estimators=None, n_jobs=None,\n              num_parallel_tree=None, random_state=None, ...)",
+    "classifier__grow_policy": "depthwise",
+    "classifier__max_depth": 3,
+    "classifier__n_estimators": 100,
+    "classifier__objective": "binary:logistic"
+  },
+  "metrics": {
+    "classification_report": {
+      "train": {
+        "0": {
+          "precision": 0.8147788040836169,
+          "recall": 0.6521400778210117,
+          "f1-score": 0.7244434838988546,
+          "support": 2570.0
+        },
+        "1": {
+          "precision": 0.9100874987428341,
+          "recall": 0.9595970307529162,
+          "f1-score": 0.9341867547617818,
+          "support": 9430.0
+        },
+        "accuracy": 0.89375,
+        "macro avg": {
+          "precision": 0.8624331514132255,
+          "recall": 0.8058685542869639,
+          "f1-score": 0.8293151193303182,
+          "support": 12000.0
+        },
+        "weighted avg": {
+          "precision": 0.8896755533033185,
+          "recall": 0.89375,
+          "f1-score": 0.889266737585305,
+          "support": 12000.0
+        }
+      },
+      "test": {
+        "0": {
+          "precision": 0.6704761904761904,
+          "recall": 0.5482866043613707,
+          "f1-score": 0.6032562125107113,
+          "support": 642.0
+        },
+        "1": {
+          "precision": 0.8828282828282829,
+          "recall": 0.9266327396098388,
+          "f1-score": 0.90420028967515,
+          "support": 2358.0
+        },
+        "accuracy": 0.8456666666666667,
+        "macro avg": {
+          "precision": 0.7766522366522366,
+          "recall": 0.7374596719856048,
+          "f1-score": 0.7537282510929306,
+          "support": 3000.0
+        },
+        "weighted avg": {
+          "precision": 0.837384935064935,
+          "recall": 0.8456666666666667,
+          "f1-score": 0.8397982571619602,
+          "support": 3000.0
+        }
+      }
+    },
+    "parsed": {
+      "train": {
+        "precision": 0.8768876471152126,
+        "recall": 0.819245045660798,
+        "f1-score": 0.8432855152135946,
+        "accuracy": 0.9022916666666667
+      },
+      "val": {
+        "precision": 0.8054536446671692,
+        "recall": 0.7570008860984253,
+        "f1-score": 0.7764917157689262,
+        "accuracy": 0.8609166666666667
+      },
+      "test": {
+        "precision": 0.7766522366522366,
+        "recall": 0.7374596719856048,
+        "f1-score": 0.7537282510929306,
+        "accuracy": 0.8456666666666667
+      }
+    }
+  },
+  "cv_results": {
+    "mean_fit_time": [
+      0.9969857215881348
+    ],
+    "std_fit_time": [
+      0.03895884485104314
+    ],
+    "mean_score_time": [
+      0.07614378929138184
+    ],
+    "std_score_time": [
+      0.012973008842544962
+    ],
+    "param_classifier": [
+      "XGBClassifier(base_score=None, booster=None, callbacks=None,\n              colsample_bylevel=None, colsample_bynode=None,\n              colsample_bytree=None, device=None, early_stopping_rounds=None,\n              enable_categorical=False, eval_metric=None, feature_types=None,\n              gamma=None, grow_policy=None, importance_type=None,\n              interaction_constraints=None, learning_rate=None, max_bin=None,\n              max_cat_threshold=None, max_cat_to_onehot=None,\n              max_delta_step=None, max_depth=None, max_leaves=None,\n              min_child_weight=None, missing=nan, monotone_constraints=None,\n              multi_strategy=None, n_estimators=None, n_jobs=None,\n              num_parallel_tree=None, random_state=None, ...)"
+    ],
+    "param_classifier__grow_policy": [
+      "depthwise"
+    ],
+    "param_classifier__max_depth": [
+      3
+    ],
+    "param_classifier__n_estimators": [
+      100
+    ],
+    "param_classifier__objective": [
+      "binary:logistic"
+    ],
+    "params": [
+      {
+        "classifier": "XGBClassifier(base_score=None, booster=None, callbacks=None,\n              colsample_bylevel=None, colsample_bynode=None,\n              colsample_bytree=None, device=None, early_stopping_rounds=None,\n              enable_categorical=False, eval_metric=None, feature_types=None,\n              gamma=None, grow_policy=None, importance_type=None,\n              interaction_constraints=None, learning_rate=None, max_bin=None,\n              max_cat_threshold=None, max_cat_to_onehot=None,\n              max_delta_step=None, max_depth=None, max_leaves=None,\n              min_child_weight=None, missing=nan, monotone_constraints=None,\n              multi_strategy=None, n_estimators=None, n_jobs=None,\n              num_parallel_tree=None, random_state=None, ...)",
+        "classifier__grow_policy": "depthwise",
+        "classifier__max_depth": 3,
+        "classifier__n_estimators": 100,
+        "classifier__objective": "binary:logistic"
+      }
+    ],
+    "split0_test_precision": [
+      0.7822037089788962
+    ],
+    "split1_test_precision": [
+      0.8187572702977575
+    ],
+    "split2_test_precision": [
+      0.7872649572649573
+    ],
+    "split3_test_precision": [
+      0.827
+    ],
+    "split4_test_precision": [
+      0.8120422867942357
+    ],
+    "mean_test_precision": [
+      0.8054536446671692
+    ],
+    "std_test_precision": [
+      0.017641031415709326
+    ],
+    "rank_test_precision": [
+      1
+    ],
+    "split0_train_precision": [
+      0.8748519435186721
+    ],
+    "split1_train_precision": [
+      0.8731778385707307
+    ],
+    "split2_train_precision": [
+      0.8798280103014888
+    ],
+    "split3_train_precision": [
+      0.8795772237544396
+    ],
+    "split4_train_precision": [
+      0.8770032194307318
+    ],
+    "mean_train_precision": [
+      0.8768876471152126
+    ],
+    "std_train_precision": [
+      0.0025999878344052704
+    ],
+    "split0_test_recall": [
+      0.7501918181146927
+    ],
+    "split1_test_recall": [
+      0.7532990974167445
+    ],
+    "split2_test_recall": [
+      0.7533134494543825
+    ],
+    "split3_test_recall": [
+      0.7604540023894863
+    ],
+    "split4_test_recall": [
+      0.7677460631168206
+    ],
+    "mean_test_recall": [
+      0.7570008860984253
+    ],
+    "std_test_recall": [
+      0.006341083133518805
+    ],
+    "rank_test_recall": [
+      1
+    ],
+    "split0_train_recall": [
+      0.8204002047927407
+    ],
+    "split1_train_recall": [
+      0.8156118822590198
+    ],
+    "split2_train_recall": [
+      0.8185708385350975
+    ],
+    "split3_train_recall": [
+      0.8186912299653155
+    ],
+    "split4_train_recall": [
+      0.8229510727518167
+    ],
+    "mean_train_recall": [
+      0.819245045660798
+    ],
+    "std_train_recall": [
+      0.002409571447224729
+    ],
+    "split0_test_f1-score": [
+      0.7641428612291703
+    ],
+    "split1_test_f1-score": [
+      0.7784219698183342
+    ],
+    "split2_test_f1-score": [
+      0.7678107070926207
+    ],
+    "split3_test_f1-score": [
+      0.7856906625509866
+    ],
+    "split4_test_f1-score": [
+      0.7863923781535186
+    ],
+    "mean_test_f1-score": [
+      0.7764917157689262
+    ],
+    "std_test_f1-score": [
+      0.009101909012182668
+    ],
+    "rank_test_f1-score": [
+      1
+    ],
+    "split0_train_f1-score": [
+      0.8432839329464188
+    ],
+    "split1_train_f1-score": [
+      0.8395637977281659
+    ],
+    "split2_train_f1-score": [
+      0.8439103058614721
+    ],
+    "split3_train_f1-score": [
+      0.8439213876720326
+    ],
+    "split4_train_f1-score": [
+      0.8457481518598837
+    ],
+    "mean_train_f1-score": [
+      0.8432855152135946
+    ],
+    "std_train_f1-score": [
+      0.002035213007703928
+    ],
+    "split0_test_accuracy": [
+      0.8554166666666667
+    ],
+    "split1_test_accuracy": [
+      0.86625
+    ],
+    "split2_test_accuracy": [
+      0.84875
+    ],
+    "split3_test_accuracy": [
+      0.865
+    ],
+    "split4_test_accuracy": [
+      0.8691666666666666
+    ],
+    "mean_test_accuracy": [
+      0.8609166666666667
+    ],
+    "std_test_accuracy": [
+      0.007634897947364219
+    ],
+    "rank_test_accuracy": [
+      1
+    ],
+    "split0_train_accuracy": [
+      0.9010416666666666
+    ],
+    "split1_train_accuracy": [
+      0.8998958333333333
+    ],
+    "split2_train_accuracy": [
+      0.90375
+    ],
+    "split3_train_accuracy": [
+      0.9039583333333333
+    ],
+    "split4_train_accuracy": [
+      0.9028125
+    ],
+    "mean_train_accuracy": [
+      0.9022916666666667
+    ],
+    "std_train_accuracy": [
+      0.0015797657175107495
+    ]
+  }
+}

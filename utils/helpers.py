@@ -12,14 +12,12 @@ import random
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
-from os import makedirs as os_makedirs
 from os.path import basename as path_basename
 from os.path import exists as path_exists
-from os.path import isfile as path_isfile
 from os.path import join as path_join
 from os.path import splitext as path_splitext
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Generator
 from warnings import warn
 
 import matplotlib.pyplot as plt
@@ -54,7 +52,7 @@ def current_datetime() -> str:
 
 
 def make_train_test_split(
-    X, y, to_dataframe=True, verbose=True, **kwargs
+    X, y, to_dataframe=True, verbose=True, tabs=0, **kwargs
 ) -> tuple[np.ndarray | pd.DataFrame, np.ndarray]:
     """Calls `sklearn.model_selection.train_test_split(X, y, **kwargs)` and returns as a dataframe if
     `to_dataframe=True` and X is originally a dataframe."""
@@ -66,8 +64,8 @@ def make_train_test_split(
         X_test = pd.DataFrame(X_test.toarray(), columns=X.columns)
 
     if verbose:
-        print("Training shape:", X_train.shape)
-        print("Testing shape:", X_test.shape)
+        print("\t" * tabs + "Training shape:", X_train.shape)
+        print("\t" * tabs + "Testing shape:", X_test.shape)
 
     return X_train, X_test, y_train, y_test
 
@@ -79,6 +77,26 @@ def replace_keys(d: dict, mapping: dict) -> dict:
         mapping.get(k, k): v if not isinstance(v, dict) else replace_keys(v, mapping)
         for k, v in d.items()
     }
+
+
+def invert_dict(d: dict) -> dict:
+    """Invert the keys and values of a dictionary."""
+    return {v: k for k, v in d.items()}
+
+
+def find_key_that_ends_with(d: dict, suffix: str, warn_not_unique=True) -> str:
+    """Find the key in the dictionary `d` that ends with the specified `suffix`."""
+    found_key = None
+    for key in d.keys():
+        if key.endswith(suffix):
+            found_key = key
+            if not warn_not_unique:
+                break
+            else:
+                if found_key:
+                    warn(f"Multiple keys found ending with '{suffix}'. Returning the first one.")
+                    break
+    return found_key
 
 
 def expected_poly_number_features(n_features: int, degree: int, total_columns: int) -> int:
@@ -680,7 +698,7 @@ def handle_categorical_cols(
 
 def encode_categorical_cols(
     df: pd.DataFrame,
-    cols: list[str],
+    cols: list[str] | None,
     categorical_encoder: OneHotEncoder,
     return_only_encoded=True,
 ) -> pd.DataFrame:
@@ -715,7 +733,11 @@ def tab_prettytable(table: PrettyTable, tabs: int) -> str:
 
 
 def parse_cv_results(
-    grid_search: BaseSearchCV | dict, scoring_prefix="mean_", include_train=True, test_is_val=True
+    grid_search: BaseSearchCV | dict,
+    scoring_prefix="mean_",
+    include_train=True,
+    test_is_val=True,
+    best_idx_metric=None,
 ) -> dict:
     """Parse the `cv_results_` from a `GridSearchCV` or similar object to extract scoring metrics.
 
@@ -729,6 +751,9 @@ def parse_cv_results(
         Whether to include the training metrics in the results.
     test_is_val : bool, default=True
         Whether the test metrics are actually validation metrics (e.g., cross-validation).
+    best_idx_metric : str, default=None
+        The metric to use for selecting the best index. This is required if `grid_search` is a
+        dictionary. The best index will be the result of `np.argmin(grid_search[best_idx_metric])`.
 
     Returns
     -------
@@ -739,8 +764,12 @@ def parse_cv_results(
         cv_results = grid_search.cv_results_
         best_index = grid_search.best_index_
     elif isinstance(grid_search, dict):
+        if best_idx_metric is None:
+            raise ValueError(
+                "best_idx_metric must be provided if grid_search is a dict, e.g., 'rank_test_RMSE'"
+            )
         cv_results = grid_search
-        best_index = np.argmin(cv_results[f"{scoring_prefix}rank_test_score"])
+        best_index = np.argmin(cv_results[best_idx_metric])
     else:
         raise ValueError("Invalid input type. Expected BaseSearchCV or dict.")
 
@@ -751,9 +780,7 @@ def parse_cv_results(
     metrics = {}
     for curr_scoring_prefix in scoring_prefixs:
         curr_results = {
-            key.replace(curr_scoring_prefix, ""): (
-                -cv_results[key][best_index] if "neg" in key else cv_results[key][best_index]
-            )
+            key.replace(curr_scoring_prefix, ""): abs(cv_results[key][best_index])
             for key in cv_results.keys()
             if key.startswith(curr_scoring_prefix)
         }
@@ -868,6 +895,91 @@ def parsed_cv_results_to_prettytable(
     return table
 
 
+def pivot_df_to_multiindex(
+    df: pd.DataFrame,
+    outer_idx_col: str,
+    row_col: str,
+    inner_idx_col: list[str] | None = None,
+    exclude_inner_idx_cols: list[str] | None = None,
+    sort_by: str | None = None,
+    sort_row: str | None = None,
+    ascending: bool = True,
+) -> pd.DataFrame:
+    """Pivot the DataFrame `df` to a multi-index DataFrame with the specified columns.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame to pivot.
+    outer_idx_col : str
+        The column to use as the outer index of the multi-index.
+    row_col : str
+        The column to use as the row index.
+    inner_idx_col : list[str] | None, optional
+        The columns to use as the inner index of the multi-index. If None, all columns except
+        `outer_idx_col` and `row_col` are used, by default None.
+    exclude_inner_idx_cols : list[str] | None, optional
+        Columns to exclude from the inner index, by default None.
+    sort_by : str | None, optional
+        The inner index column to sort by. If None, no sorting is applied, by default None.
+    sort_row : str | None, optional
+        The specific row to use for sorting. If None and sort_by is specified,
+        the first row is used, by default None.
+    ascending : bool, optional
+        Sort ascending vs. descending. Only applicable when sort_by is not None, by default True.
+
+    Returns
+    -------
+    pd.DataFrame
+        The pivoted DataFrame with the specified columns.
+    """
+    # If metrics columns are not specified, use all columns except outer_col and row_col
+    if inner_idx_col is None:
+        inner_idx_col = [col for col in df.columns if col not in [outer_idx_col, row_col]]
+
+    # Exclude specified columns from inner_idx_col
+    if exclude_inner_idx_cols:
+        inner_idx_col = [col for col in inner_idx_col if col not in exclude_inner_idx_cols]
+
+    # Pivot the dataframe
+    pivoted_df = df.pivot(index=row_col, columns=outer_idx_col, values=inner_idx_col)
+
+    # Check if there's only one column in the inner index
+    single_inner_col = len(inner_idx_col) == 1
+    if single_inner_col:
+        # Remove the inner level of the column MultiIndex
+        pivoted_df.columns = pivoted_df.columns.droplevel(0)
+
+        # Set the name of the columns to the single inner index column
+        pivoted_df.columns.name = inner_idx_col[0].capitalize()
+    else:
+        # Reorder levels in the column multiindex
+        pivoted_df = pivoted_df.reorder_levels([1, 0], axis=1)
+        pivoted_df = pivoted_df.sort_index(axis=1, level=0)  # Sort by outer index first
+
+    # Sort the columns based on the specified inner index column and row
+    if sort_by is not None:
+        if sort_by not in inner_idx_col:
+            raise ValueError(f"sort_by column '{sort_by}' not found in inner_idx_col")
+
+        if sort_row is not None and sort_row not in pivoted_df.index:
+            raise ValueError(f"sort_row '{sort_row}' not found in DataFrame index")
+
+        sort_row = sort_row or pivoted_df.index[0]
+
+        if single_inner_col:
+            # For single inner index column, sort directly
+            sort_order = pivoted_df.loc[sort_row].sort_values(ascending=ascending).index
+        else:
+            # For multiple inner index columns, sort using the specified column
+            sort_values = pivoted_df.loc[sort_row, (slice(None), sort_by)]
+            sort_order = sort_values.sort_values(ascending=ascending).index.get_level_values(0)
+
+        pivoted_df = pivoted_df.reindex(columns=sort_order, level=0)
+
+    return pivoted_df
+
+
 def sort_prettytable(
     table: PrettyTable, sort_column: str, custom_order: list[str] | None = None
 ) -> PrettyTable:
@@ -953,7 +1065,7 @@ def describe_param_grid(param_grid: list[dict] | dict, tabs=0) -> str:
         for key, value in grid.items():
             formatted_value = format_value(value)
             description.append(f"\t{key}: {formatted_value}")
-        return "\n".join(description) if not tabs else tab_lines(description, tabs)
+        return "\n".join(description) if not tabs else tab_lines(description, 1)
 
     if isinstance(param_grid, list):
         descriptions = []
@@ -1016,31 +1128,6 @@ def pretty_print_dict(
         pretty_string = pretty_string.replace("\n", "")
 
     return pretty_string
-
-
-# def make_json_serializable(data: dict, ignore_non_serializable=False, warn=False) -> dict:
-#     """Make the given `data` dictionary JSON serializable by converting all keys and values to
-#     strings. If `ignore_non_serializable` is `True`, non-serializable values are ignored, i.e., not
-#     included in the resulting dictionary (a warning is issued if `warn` is `True`). If `False`,
-#     an error is raised when a non-serializable value is encountered."""
-#     json_serializable_data = {}
-#     for key, value in data.items():
-#         json_serializable_value = value.tolist() if isinstance(value, np.ndarray) else value
-
-#         try:
-#             json_serializable_data[str(key)] = (
-#                 json_serializable_value if isinstance(value, (int, float, str)) else str(value)
-#             )
-#         except TypeError as e:
-#             if ignore_non_serializable:
-#                 if warn:
-#                     logger.warning(
-#                         f"Non-serializable value found for key '{key}'. Ignoring it. Error: {e}"
-#                     )
-#                 continue
-#             raise e
-
-#     return json_serializable_data
 
 
 def make_json_serializable(
@@ -1175,6 +1262,59 @@ def exists_in_folder(filename: str, folder: str) -> bool:
     return path_exists(fullpath)
 
 
+def list_non_empty_dirs(directory: str | Path) -> Generator[str, None, None]:
+    """List all non-empty directories in the given `directory`."""
+    for folder in os.listdir(directory):
+        folder = os.path.join(directory, folder)
+
+        # Check if the folder is a directory and not empty
+        if os.path.isdir(folder) and os.listdir(folder):
+            yield folder
+
+
+def get_objects_from_dirs(
+    directory: str | Path,
+    func: Callable,
+    only_dirs_with_suffix: list[str] = None,
+    exclude_none=True,
+    include_folder=True,
+) -> Generator[tuple[str, Any], Any, None]:
+    """Yields an object for each non-empty directory in the given `directory` using the provided
+    `func`. The `func` should take a directory as input and return an object, which is yielded by
+    this function. If `exclude_none` is True, objects that are `None` are excluded.
+
+    Parameters
+    ----------
+    directory : str | Path
+        The directory to search for non-empty directories.
+    func : Callable
+        The function to apply to each non-empty directory.
+    only_dirs_with_suffix : list[str], optional
+        If provided, only directories with the specified suffixes are considered, by default None.
+    exclude_none : bool, optional
+        If True, objects that are `None` are excluded, by default True.
+    include_folder : bool, optional
+        If True, the folder is included in the yielded object, by default True.
+
+    Yields
+    ------
+    tuple[str, Any] | Any
+        A tuple containing the folder and the object returned by the function, or just the object.
+    """
+    for folder in list_non_empty_dirs(directory):
+        if only_dirs_with_suffix and not any(
+            folder.endswith(suffix) for suffix in only_dirs_with_suffix
+        ):
+            continue
+        result = func(folder)
+        if exclude_none and result is None:
+            continue
+        if include_folder:
+            yield folder, result
+        else:
+            yield result
+
+
 def in_cache(filename: str) -> bool:
     """Check if a file exists in the cache directory, specified by the global variable `CACHE_DIR`."""
     return exists_in_folder(filename, CACHE_DIR)
@@ -1259,3 +1399,51 @@ def save_to_cache(file_: str, obj: Any, overwrite: bool = True, subfolder: str =
 def copy(data, deep=True) -> Any:
     """Return a copy of the object."""
     return deepcopy(data) if deep else copy(data)
+
+
+def get_different_colors_from_plt_prop_cycle(
+    num_colors: int, exclude_colors: list[str] | None = None, style="default", allow_less=False
+) -> list[str]:
+    """Get a list of different colors from the default matplotlib color cycle, that is,
+    `plt.rcParams["axes.prop_cycle"].by_key()["color"]`.
+
+    Parameters
+    ----------
+    num_colors : int
+        The number of different colors to get.
+    exclude_colors : list[str] | None, optional
+        A list of colors to exclude from the list, by default None.
+    style : str, optional
+        The style to use for the plot, by default "default".
+    allow_less : bool, optional
+        If True, the function will return fewer colors if it can't find the requested number of
+        colors, by default False.
+
+    Returns
+    -------
+    list[str]
+        A list of different colors from the default matplotlib color cycle.
+
+    Raises
+    ------
+    ValueError
+        If the number of different colors requested is greater than the number of colors in the
+        default matplotlib color cycle and `allow_less` is False.
+    """
+    colors = []
+    with plt.style.context(style):
+        for color in plt.rcParams["axes.prop_cycle"].by_key()["color"]:
+            if exclude_colors and color in exclude_colors:
+                continue
+            if color not in colors:
+                colors.append(color)
+            if len(colors) == num_colors:
+                break
+
+    if not allow_less and len(colors) < num_colors:
+        raise ValueError(
+            f"Could not find {num_colors} different colors. Increase the number of colors in the "
+            + "matplotlib color cycle."
+        )
+
+    return colors
