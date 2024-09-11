@@ -5,6 +5,7 @@
 
 from pathlib import Path
 from typing import Any
+from warnings import warn
 
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -28,9 +29,9 @@ from utils.transformers import FeatureSetDecider
 def preprocessing_pipeline(
     drop_columns: list[str],
     numerical_scaler: StandardScaler | MinMaxScaler | RobustScaler | None = None,
-    transform="pandas"
+    transform="pandas",
 ) -> Pipeline:
-    """Base pipeline that performs the feature transformations (should be valid for regression 
+    """Base pipeline that performs the feature transformations (should be valid for regression
     and classification).
 
     Parameters
@@ -51,29 +52,56 @@ def preprocessing_pipeline(
     """
     pipeline = Pipeline(
         steps=[
-            (
-                "column_dropper",
-                ColumnTransformer([("dropper", "drop", drop_columns)], remainder="passthrough")
-            ),
+            ("column_dropper", ColumnTransformer([("dropper", "drop", drop_columns)], remainder="passthrough")),
             (
                 "preprocessing",
-                FeatureUnion([
-                    ("categorical", Pipeline([
-                        ("feature_set_decider", FeatureSetDecider("categorical")),
-                    ])),
-                    ("numerical", Pipeline([
-                        ("feature_union", FeatureUnion([
-                            ("non_skewed", Pipeline([
-                                ("feature_set_decider", FeatureSetDecider("non_skewed")),
-                            ])),
-                            ("skewed", Pipeline([
-                                ("feature_set_decider", FeatureSetDecider("skewed")),
-                                ("power_transformer", PowerTransformer(method="yeo-johnson")),
-                            ])),
-                        ])),
-                        ("scaler", numerical_scaler),
-                    ])),
-                ])
+                FeatureUnion(
+                    [
+                        (
+                            "categorical",
+                            Pipeline(
+                                [
+                                    ("feature_set_decider", FeatureSetDecider("categorical")),
+                                ]
+                            ),
+                        ),
+                        (
+                            "numerical",
+                            Pipeline(
+                                [
+                                    (
+                                        "feature_union",
+                                        FeatureUnion(
+                                            [
+                                                (
+                                                    "non_skewed",
+                                                    Pipeline(
+                                                        [
+                                                            ("feature_set_decider", FeatureSetDecider("non_skewed")),
+                                                        ]
+                                                    ),
+                                                ),
+                                                (
+                                                    "skewed",
+                                                    Pipeline(
+                                                        [
+                                                            ("feature_set_decider", FeatureSetDecider("skewed")),
+                                                            (
+                                                                "power_transformer",
+                                                                PowerTransformer(method="yeo-johnson"),
+                                                            ),
+                                                        ]
+                                                    ),
+                                                ),
+                                            ]
+                                        ),
+                                    ),
+                                    ("scaler", numerical_scaler),
+                                ]
+                            ),
+                        ),
+                    ]
+                ),
             ),
         ]
     )
@@ -111,41 +139,65 @@ def preprocessing_pipeline2(
     if skew_transformer is None:
         pipeline = Pipeline(
             steps=[
-                (
-                    "column_dropper",
-                    ColumnTransformer([("dropper", "drop", drop_columns)], remainder="passthrough")
-                ),
-                ("scaler", numerical_scaler), 
+                ("column_dropper", ColumnTransformer([("dropper", "drop", drop_columns)], remainder="passthrough")),
+                ("scaler", numerical_scaler),
                 ("remove_constant", VarianceThreshold(threshold=0.01)),
             ]
         )
     else:
         pipeline = Pipeline(
             steps=[
-                (
-                    "column_dropper",
-                    ColumnTransformer([("dropper", "drop", drop_columns)], remainder="passthrough")
-                ),
+                ("column_dropper", ColumnTransformer([("dropper", "drop", drop_columns)], remainder="passthrough")),
                 (
                     "preprocessing",
-                    FeatureUnion([
-                        ("categorical", Pipeline([
-                            ("feature_set_decider", FeatureSetDecider("categorical")),
-                        ])),
-                        ("numerical", Pipeline([
-                            ("feature_union", FeatureUnion([
-                                ("non_skewed", Pipeline([
-                                    ("feature_set_decider", FeatureSetDecider("non_skewed")),
-                                ])),
-                                ("skewed", Pipeline([
-                                    ("feature_set_decider", FeatureSetDecider("skewed")),
-                                    ("power_transformer", skew_transformer),
-                                ])),
-                            ])),
-                        ])),
-                    ])
+                    FeatureUnion(
+                        [
+                            (
+                                "categorical",
+                                Pipeline(
+                                    [
+                                        ("feature_set_decider", FeatureSetDecider("categorical")),
+                                    ]
+                                ),
+                            ),
+                            (
+                                "numerical",
+                                Pipeline(
+                                    [
+                                        (
+                                            "feature_union",
+                                            FeatureUnion(
+                                                [
+                                                    (
+                                                        "non_skewed",
+                                                        Pipeline(
+                                                            [
+                                                                (
+                                                                    "feature_set_decider",
+                                                                    FeatureSetDecider("non_skewed"),
+                                                                ),
+                                                            ]
+                                                        ),
+                                                    ),
+                                                    (
+                                                        "skewed",
+                                                        Pipeline(
+                                                            [
+                                                                ("feature_set_decider", FeatureSetDecider("skewed")),
+                                                                ("power_transformer", skew_transformer),
+                                                            ]
+                                                        ),
+                                                    ),
+                                                ]
+                                            ),
+                                        ),
+                                    ]
+                                ),
+                            ),
+                        ]
+                    ),
                 ),
-                ("scaler", numerical_scaler), 
+                ("scaler", numerical_scaler),
                 ("remove_constant", VarianceThreshold(threshold=0.01)),
             ]
         )
@@ -176,11 +228,11 @@ def prepare_df_train_pipeline(
         dummy_is_categorical=dummy_is_categorical,
         consecutive_sequences_are_categorical=consecutive_sequences_are_categorical,
         low_unique_int_values_are_categorical=low_unique_int_values_are_categorical,
-        verbose=True
+        verbose=True,
     ) -> tuple[pd.DataFrame, OneHotEncoder, list[str], list[str]]:
         # if target_is_categorical:
         #     cat_values_in_target = df[target].unique().tolist()
-            
+
         categorical_cols, numerical_cols = categorical_and_numerical_columns(
             df.drop(columns=[target] + drop_cols_before_encoding),
             dummy_is_categorical=dummy_is_categorical,
@@ -188,9 +240,7 @@ def prepare_df_train_pipeline(
             low_unique_int_values_are_categorical=low_unique_int_values_are_categorical,
         )
 
-        categorical_encoder, df = handle_categorical_cols(
-            df, categorical_cols, return_only_encoded=False
-        )
+        categorical_encoder, df = handle_categorical_cols(df, categorical_cols, return_only_encoded=False)
 
         if verbose:
             print("\t" * tabs + f"Numerical ({len(numerical_cols)}) ", numerical_cols)
@@ -228,8 +278,7 @@ def prepare_df_train_pipeline(
         )
 
         print(
-            "\t" * tabs
-            + f"Found {len(correlated_cols)} cols with corr >= {correlation_threshold}: ",
+            "\t" * tabs + f"Found {len(correlated_cols)} cols with corr >= {correlation_threshold}: ",
             end="",
         )
         print(correlated_cols)
@@ -251,10 +300,7 @@ def prepare_df_train_pipeline(
 
     df_train = pd.read_csv(path)
     df_train.drop(columns=remove_cols, inplace=True)  # drop unwanted columns
-    print(
-        "\t" * tabs
-        + f"The loaded dataset has {df_train.shape[0]} rows and {df_train.shape[1]} columns"
-    )
+    print("\t" * tabs + f"The loaded dataset has {df_train.shape[0]} rows and {df_train.shape[1]} columns")
 
     # Handling missing values
     total_missing_values = df_train.isnull().sum().sum()
@@ -321,11 +367,7 @@ def prepare_df_train_pipeline(
     )
 
 
-def extend_pipeline(
-    base_pipeline: Pipeline,
-    *new_steps: list[tuple[str, Any]],
-    transform="pandas"
-) -> Pipeline:
+def extend_pipeline(base_pipeline: Pipeline, *new_steps: list[tuple[str, Any]], transform="pandas") -> Pipeline:
     """Extend the base pipeline with additional `*steps`.
 
     Parameters
@@ -335,7 +377,7 @@ def extend_pipeline(
     *steps : list[tuple[str, Any]]
         The steps to add to the pipeline. The tuple should contain the name of the step and a valid
         sklearn transformer or estimator.
-            
+
     Returns
     -------
     Pipeline
@@ -343,7 +385,10 @@ def extend_pipeline(
     """
     steps = list(base_pipeline.steps)
     steps.extend([*new_steps])
-    
+
     extended_pipeline = Pipeline(steps)
-    extended_pipeline.set_output(transform=transform)
+    try:
+        extended_pipeline.set_output(transform=transform)
+    except ValueError as e:
+        warn(f"Could not set the output transform to 'pandas', because of: {str(e)}")
     return extended_pipeline

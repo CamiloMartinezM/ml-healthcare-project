@@ -33,7 +33,8 @@ from utils.helpers import (
 from utils.logger import logger
 from utils.metrics import find_closest_roc_point
 from sklearn.metrics import PrecisionRecallDisplay, RocCurveDisplay
-from utils import scorers 
+from utils import scorers
+
 
 class MetricPlot:
     """A class to create a line plot with multiple axes."""
@@ -69,9 +70,7 @@ class MetricPlot:
             raise ValueError(f"Axis '{axis_name}' does not exist. Add it first with add_axis().")
 
         if data_df is not None and not isinstance(x, str) and not isinstance(y, str):
-            raise ValueError(
-                "If data_df is provided, x and y must be strings representing " + "column names."
-            )
+            raise ValueError("If data_df is provided, x and y must be strings representing " + "column names.")
 
         if data_df is None and isinstance(x, str) and isinstance(y, str):
             raise ValueError("If data_df is not provided, x and y must be arrays or lists.")
@@ -126,23 +125,19 @@ class MetricPlot:
         save_format="svg",
         show=True,
         dpi=DPI,
+        use_adjust_text=False,
+        y_max=None,
     ) -> None:
         with plt.style.context(style):
             fig, ax_main = plt.subplots(figsize=figsize, dpi=dpi, constrained_layout=True)
             axes = [ax_main]
 
-            unique_sets = set(
-                entry["set_name"]
-                for (_, axis_data) in self.axes.items()
-                for entry in axis_data["data"]
-            )
+            unique_sets = set(entry["set_name"] for (_, axis_data) in self.axes.items() for entry in axis_data["data"])
             unique_metrics = list(self.axes.keys())
 
             if self.color_by == "metric":
                 if not cmap:
-                    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"][
-                        : len(unique_metrics)
-                    ]
+                    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"][: len(unique_metrics)]
                 else:
                     colors = plt.cm.get_cmap(cmap)(np.linspace(0, 1, len(unique_metrics)))
                 color_dict = dict(zip(unique_metrics, colors))
@@ -165,9 +160,7 @@ class MetricPlot:
                 if self.sort_by == axis_name:
                     sort_data = axis_data["data"][0]["data_df"]
                     sort_column = axis_data["data"][0]["y_column"]
-                    sorted_indices = sort_data.sort_values(
-                        sort_column, ascending=self.sort_ascending
-                    ).index
+                    sorted_indices = sort_data.sort_values(sort_column, ascending=self.sort_ascending).index
                     for entry in axis_data["data"]:
                         entry["data_df"] = entry["data_df"].reindex(sorted_indices)
 
@@ -175,12 +168,8 @@ class MetricPlot:
                     x_data = entry["data_df"][entry["x_column"]]
                     y_data = entry["data_df"][entry["y_column"]]
 
-                    color = color_dict[
-                        entry["metric_name" if self.color_by == "metric" else "set_name"]
-                    ]
-                    marker = marker_dict[
-                        entry["set_name" if self.color_by == "metric" else "metric_name"]
-                    ]
+                    color = color_dict[entry["metric_name" if self.color_by == "metric" else "set_name"]]
+                    marker = marker_dict[entry["set_name" if self.color_by == "metric" else "metric_name"]]
 
                     ax.plot(
                         x_data,
@@ -196,9 +185,10 @@ class MetricPlot:
                     # Add annotations of each point
                     if annotate_values:
                         for x, y in zip(x_data, y_data):
-                            texts.append(
+                            if use_adjust_text:
+                                texts.append(ax.text(x, y, f"{y:.3f}", fontsize=6, color=color, alpha=0.7))
+                            else:
                                 ax.text(x, y, f"{y:.3f}", fontsize=6, color=color, alpha=0.7)
-                            )
 
                     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
                     ax.tick_params(
@@ -210,22 +200,16 @@ class MetricPlot:
 
                     # Add these lines to color the ticks themselves
                     ax.yaxis.set_tick_params(color=color if self.color_by == "metric" else "black")
-                    ax.yaxis.set_tick_params(
-                        which="minor", color=color if self.color_by == "metric" else "black"
-                    )
+                    ax.yaxis.set_tick_params(which="minor", color=color if self.color_by == "metric" else "black")
 
                     # This line colors the axis line itself
                     if i > 0:
-                        ax.spines["right"].set_color(
-                            color if self.color_by == "metric" else "black"
-                        )
+                        ax.spines["right"].set_color(color if self.color_by == "metric" else "black")
                     else:
                         ax.spines["left"].set_color(color if self.color_by == "metric" else "black")
 
                 if axis_data["title"]:
-                    ax.set_ylabel(
-                        axis_data["title"], color=color if self.color_by == "metric" else "black"
-                    )
+                    ax.set_ylabel(axis_data["title"], color=color if self.color_by == "metric" else "black")
 
                 axes.append(ax)
 
@@ -250,10 +234,7 @@ class MetricPlot:
 
             # Add legend
             if self.color_by == "set":
-                legend_elements = [
-                    Patch(facecolor=color_dict[set_], label=set_.capitalize())
-                    for set_ in unique_sets
-                ]
+                legend_elements = [Patch(facecolor=color_dict[set_], label=set_.capitalize()) for set_ in unique_sets]
                 legend_elements += [
                     Line2D(
                         [0],
@@ -293,8 +274,17 @@ class MetricPlot:
             )
 
             # Apply adjustText to avoid overlapping
-            if annotate_values:
-                adjust_text(texts, arrowprops=dict(arrowstyle="->", color="red", lw=0.5))
+            if annotate_values and use_adjust_text:
+                adjust_text(
+                    texts,
+                    arrowprops=dict(arrowstyle="->", color="k", lw=0.5),
+                    expand=(1.2, 3),
+                    only_move={"text": "y"},
+                )
+
+            # Add the new code here
+            if y_max is not None:
+                ax_main.set_ylim(top=y_max)
 
             # Adjust layout
             fig.tight_layout()
@@ -488,9 +478,7 @@ def scatter_plot(
 
         # Sort the indices list based on how many points there are. The last must be the one with
         # less points, so they are most likely to be put on top
-        sorted_indices_labels = sorted(
-            zip(indices, labels), key=lambda x: X[x[0]].shape[0], reverse=True
-        )
+        sorted_indices_labels = sorted(zip(indices, labels), key=lambda x: X[x[0]].shape[0], reverse=True)
         indices = [i for i, _ in sorted_indices_labels]
         labels = [l for _, l in sorted_indices_labels]
 
@@ -564,9 +552,7 @@ def visualize(
         if method == "pca":
             X_reduced = apply_pca(X, n_components=n_components, random_state=random_state)
         elif method == "tsne":
-            X_reduced = apply_tsne(
-                X, n_components=n_components, perplexity=30, random_state=random_state
-            )
+            X_reduced = apply_tsne(X, n_components=n_components, perplexity=30, random_state=random_state)
         elif method == "lda":
             if indices is None:
                 raise ValueError("Indices must be provided for LDA")
@@ -582,9 +568,7 @@ def visualize(
         elif method == "umap":
             X_reduced = apply_umap(X, n_components=n_components)
         else:
-            raise ValueError(
-                f"Unknown method: {method}. Use 'pca', 'ica', 'tsne', 'umap', or 'lda'."
-            )
+            raise ValueError(f"Unknown method: {method}. Use 'pca', 'ica', 'tsne', 'umap', or 'lda'.")
     else:
         logger.info(f"Not applying {method} because X.shape = {X.shape}")
         if not isinstance(X, np.ndarray):
@@ -620,9 +604,7 @@ def regression_performance_comparison(
     ncols = 2 if y_pred_transformed is not None else 1
 
     with plt.style.context(style):
-        f, (ax0, ax1) = plt.subplots(
-            2, ncols, sharey="row", figsize=(8, 6), constrained_layout=True
-        )
+        f, (ax0, ax1) = plt.subplots(2, ncols, sharey="row", figsize=(8, 6), constrained_layout=True)
 
         # plot the actual vs predicted values
         PredictionErrorDisplay.from_predictions(
@@ -853,6 +835,7 @@ def regression_performance_comparison(
 #     plt.show()
 #     plt.close(fig)
 
+
 def plot_pr_roc_curves(
     classifier: Any,
     X_test: np.ndarray,
@@ -860,8 +843,8 @@ def plot_pr_roc_curves(
     tuned_model: Any | None = None,
     clf_name: str | None = None,
     figsize=None,
-    style = "default",
-    suptitle: str | None =None,
+    style="default",
+    suptitle: str | None = None,
     exclude_colors: list[str] = ["k", "r"],
     show_objective_score: bool = False,
     show: bool = True,
@@ -917,10 +900,12 @@ def plot_pr_roc_curves(
                 continue
 
             decision_threshold = getattr(model, "best_threshold_", 0.5)
-            
+
             # Precision-Recall curve
             PrecisionRecallDisplay.from_estimator(
-                model, X_test, y_test,
+                model,
+                X_test,
+                y_test,
                 pos_label=pos_label,
                 linestyle=linestyle,
                 color=color,
@@ -930,13 +915,17 @@ def plot_pr_roc_curves(
             axs[0].plot(
                 scorers.clf_scorers["recall"](model, X_test, y_test),
                 scorers.clf_scorers["precision"](model, X_test, y_test),
-                marker, markersize=5, color=color,
-                label=f"Cut-off point at probability of {decision_threshold:.2f}"
+                marker,
+                markersize=5,
+                color=color,
+                label=f"Cut-off point at probability of {decision_threshold:.2f}",
             )
 
             # ROC curve
             RocCurveDisplay.from_estimator(
-                model, X_test, y_test,
+                model,
+                X_test,
+                y_test,
                 pos_label=pos_label,
                 linestyle=linestyle,
                 color=color,
@@ -947,8 +936,10 @@ def plot_pr_roc_curves(
             axs[1].plot(
                 scorers.clf_scorers["fpr"](model, X_test, y_test),
                 scorers.clf_scorers["tpr"](model, X_test, y_test),
-                marker, markersize=5, color=color,
-                label=f"Cut-off point at probability of {decision_threshold:.2f}"
+                marker,
+                markersize=5,
+                color=color,
+                label=f"Cut-off point at probability of {decision_threshold:.2f}",
             )
 
         axs[0].set_title("Precision-Recall Curve")
@@ -956,7 +947,7 @@ def plot_pr_roc_curves(
         axs[1].set_title("ROC Curve")
         axs[1].legend()
 
-        if show_objective_score and tuned_model is not None and hasattr(tuned_model, 'cv_results_'):
+        if show_objective_score and tuned_model is not None and hasattr(tuned_model, "cv_results_"):
             axs[2].plot(
                 tuned_model.cv_results_["thresholds"],
                 tuned_model.cv_results_["scores"],
@@ -965,7 +956,9 @@ def plot_pr_roc_curves(
             axs[2].plot(
                 tuned_model.best_threshold_,
                 tuned_model.best_score_,
-                "o", markersize=5, color=colors[1],
+                "o",
+                markersize=5,
+                color=colors[1],
                 label="Optimal cut-off point for the business metric",
             )
             axs[2].legend()
@@ -976,9 +969,9 @@ def plot_pr_roc_curves(
         if suptitle:
             # f"Performance curves for {clf_name or classifier.__class__.__name__}"
             fig.suptitle(suptitle)
-        
+
         fig.tight_layout()
-        
+
         if show:
             plt.show()
         plt.close(fig)

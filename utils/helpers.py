@@ -281,20 +281,48 @@ def apply_mask_to_cv(cv: Any, X: np.ndarray, mask: np.ndarray, only_train=True) 
     list[tuple]
         A list of tuples containing the cleaned training and validation indices.
     """
+    # assert mask.shape[0] == X.shape[0], "Invalid mask shape. Must match the number of samples."
+    # assert mask.dtype == bool, "Invalid mask type. Must be boolean."
+
+    # if isinstance(cv, list) and len(cv) > 0 and isinstance(cv[0], tuple) and len(cv[0]) == 2:
+    #     folds = cv
+    # else:
+    #     folds = cv.split(X)
+
+    # preprocessed_folds = []
+    # for train_index, val_index in folds:
+    #     clean_train_index = train_index[mask[train_index]]
+
+    #     if not only_train:
+    #         clean_val_index = val_index[mask[val_index]]
+    #         preprocessed_folds.append((clean_train_index, clean_val_index))
+    #     else:
+    #         preprocessed_folds.append((clean_train_index, val_index))
+
+    # return preprocessed_folds
     assert mask.shape[0] == X.shape[0], "Invalid mask shape. Must match the number of samples."
     assert mask.dtype == bool, "Invalid mask type. Must be boolean."
 
     if isinstance(cv, list) and len(cv) > 0 and isinstance(cv[0], tuple) and len(cv[0]) == 2:
         folds = cv
     else:
-        folds = cv.split(X)
+        folds = list(cv.split(X))
 
     preprocessed_folds = []
     for train_index, val_index in folds:
-        clean_train_index = train_index[mask[train_index]]
+        # Create boolean masks for train and val indices
+        train_mask = np.zeros(X.shape[0], dtype=bool)
+        train_mask[train_index] = True
+        
+        # Apply the combined mask
+        clean_train_mask = train_mask & mask
+        clean_train_index = np.where(clean_train_mask)[0]
 
         if not only_train:
-            clean_val_index = val_index[mask[val_index]]
+            val_mask = np.zeros(X.shape[0], dtype=bool)
+            val_mask[val_index] = True
+            clean_val_mask = val_mask & mask
+            clean_val_index = np.where(clean_val_mask)[0]
             preprocessed_folds.append((clean_train_index, clean_val_index))
         else:
             preprocessed_folds.append((clean_train_index, val_index))
@@ -1276,6 +1304,7 @@ def get_objects_from_dirs(
     directory: str | Path,
     func: Callable,
     only_dirs_with_suffix: list[str] = None,
+    only_dirs_with_this_in_name: list[str] = None,
     exclude_none=True,
     include_folder=True,
 ) -> Generator[tuple[str, Any], Any, None]:
@@ -1291,6 +1320,9 @@ def get_objects_from_dirs(
         The function to apply to each non-empty directory.
     only_dirs_with_suffix : list[str], optional
         If provided, only directories with the specified suffixes are considered, by default None.
+    only_dirs_with_this_in_name : list[str], optional
+        If provided, only directories with the specified strings in their names are considered, by
+        default None.
     exclude_none : bool, optional
         If True, objects that are `None` are excluded, by default True.
     include_folder : bool, optional
@@ -1306,6 +1338,11 @@ def get_objects_from_dirs(
             folder.endswith(suffix) for suffix in only_dirs_with_suffix
         ):
             continue
+        if only_dirs_with_this_in_name and not any(
+            name in folder for name in only_dirs_with_this_in_name
+        ):
+            continue
+
         result = func(folder)
         if exclude_none and result is None:
             continue

@@ -99,7 +99,6 @@ def apply_tsne(
             n_jobs=32,
             perplexity=perplexity,
             learning_rate=learning_rate,
-            negative_gradient_method="fft",
             random_state=random_state,
         ).fit(X)
 

@@ -173,10 +173,24 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
                 "objective": ["binary:logistic"],
             },
             "bayes": {
-                "n_estimators":  Integer(100, 500),
+                "n_estimators": Integer(100, 500),
                 "max_depth": Integer(3, 7),
                 "grow_policy": Categorical(["depthwise", "lossguide"]),
                 "objective": Categorical(["binary:logistic"]),
+            },
+        },
+        "XGBRegressor": {
+            "grid": {
+                "n_estimators": [100, 300, 500],
+                "max_depth": [3, 5, 7],
+                "grow_policy": ["depthwise", "lossguide"],
+                "objective": ["reg:squarederror"],
+            },
+            "bayes": {
+                "n_estimators": Integer(100, 500),
+                "max_depth": Integer(3, 7),
+                "grow_policy": Categorical(["depthwise", "lossguide"]),
+                "objective": Categorical(["reg:squarederror"]),
             },
         },
         "SVR": {
@@ -419,9 +433,7 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
             "bayes": {
                 "alpha": Real(1e-4, 1e-2, prior="log-uniform"),
                 "penalty": Categorical(["l1", "l2", "elasticnet"]),
-                "loss": Categorical(
-                    ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"]
-                ),
+                "loss": Categorical(["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"]),
                 "class_weight": Categorical(["balanced"]),
                 "fit_intercept": Categorical([True]),
                 "max_iter": Categorical([5000]),
@@ -443,9 +455,7 @@ def available_param_grids_for(model_name: str, grid_search_type: str) -> dict | 
             "bayes": {
                 "alpha": Real(1e-4, 1e-2, prior="log-uniform"),
                 "penalty": Categorical(["l1", "l2", "elasticnet"]),
-                "loss": Categorical(
-                    ["squared_loss", "huber", "epsilon_insensitive", "squared_epsilon_insensitive"]
-                ),
+                "loss": Categorical(["squared_loss", "huber", "epsilon_insensitive", "squared_epsilon_insensitive"]),
                 "fit_intercept": Categorical([True]),
                 "max_iter": Categorical([5000]),
             },
@@ -685,12 +695,8 @@ def create_hurdle_pipeline_param_grid(
         param_grid["select_k_best__score_func"] = select_k_score_func
 
     # HurdleRegression parameters
-    clf_params = choose_param_grid(
-        clf_model, grid_search_type, add_str_to_keys="hurdle__clf_params"
-    )
-    reg_params = choose_param_grid(
-        reg_model, grid_search_type, add_str_to_keys="hurdle__reg_params"
-    )
+    clf_params = choose_param_grid(clf_model, grid_search_type, add_str_to_keys="hurdle__clf_params")
+    reg_params = choose_param_grid(reg_model, grid_search_type, add_str_to_keys="hurdle__reg_params")
 
     param_grid.update(clf_params)
     param_grid.update(reg_params)
@@ -742,9 +748,7 @@ def make_smaller_param_grid(param_grid: dict, subset=2) -> dict:
     return smaller_param_grid
 
 
-def combine_param_grids(
-    param_grid_1: list[dict] | dict, param_grid_2: list[dict] | dict
-) -> list[dict] | dict:
+def combine_param_grids(param_grid_1: list[dict] | dict, param_grid_2: list[dict] | dict) -> list[dict] | dict:
     """Combine two parameter grids into a single parameter grid."""
     if isinstance(param_grid_1, list) and isinstance(param_grid_2, list):
         combined_param_grids = []
@@ -764,9 +768,7 @@ def combine_param_grids(
     return combined_param_grids
 
 
-def construct_param_grids_list(
-    base_param_grid: dict, key: str, use_bayes_search=False
-) -> list[list[dict]]:
+def construct_param_grids_list(base_param_grid: dict, key: str, use_bayes_search=False) -> list[list[dict]]:
     """Construct a list of parameter grids for a given key in the base parameter grid. If the key
     `"dimensionality_reduction"` is present in the base parameter grid, then the identity function
     is added to the dimensionality reduction techniques to test if no reduction is better. Also,
@@ -838,9 +840,7 @@ def construct_param_grids_list(
         )
         combined_param_grid = combine_param_grids(base_param_grid, clf_param_grid)
         combined_param_grid = (
-            [combined_param_grid]
-            if not isinstance(combined_param_grid, list)
-            else combined_param_grid
+            [combined_param_grid] if not isinstance(combined_param_grid, list) else combined_param_grid
         )
 
         # Fix list of models
@@ -848,10 +848,7 @@ def construct_param_grids_list(
             grid[key] = [model]
 
             # Only apply Nystroem to LinearSVC and NuSVC
-            if (
-                isinstance(model, (LinearSVR, NuSVR, LinearSVC, NuSVC))
-                and "nystroem" in base_param_grid
-            ):
+            if isinstance(model, (LinearSVR, NuSVR, LinearSVC, NuSVC)) and "nystroem" in base_param_grid:
                 grid["nystroem"] = base_param_grid["nystroem"]
                 grid["nystroem__n_components"] = base_param_grid["nystroem__n_components"]
                 grid["nystroem__kernel"] = base_param_grid["nystroem__kernel"]

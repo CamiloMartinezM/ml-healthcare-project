@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from sklearn.exceptions import ConvergenceWarning, FitFailedWarning
 from sklearn.model_selection import GridSearchCV, ParameterGrid
 from sklearn.model_selection._search import BaseSearchCV
@@ -21,6 +22,7 @@ from utils import metrics as my_metrics
 from utils import plots, scorers
 from utils.helpers import ensure_directory_exists
 from utils.param_grids import make_smaller_param_grid
+from utils.statistical import hat_matrix_diag
 
 
 def run_grid_search(
@@ -48,18 +50,14 @@ def run_grid_search(
     GridSearchCV | BayesSearchCV
         The fitted grid search object.
     """
-    print(
-        "\t" * tabs + f"Starting an initial hyperparameter search, X := {X.shape}, y := {y.shape}."
-    )
+    print("\t" * tabs + f"Starting an initial hyperparameter search, X := {X.shape}, y := {y.shape}.")
 
     if use_bayes_search:
         hyperparameter_search = BayesSearchCV(pipeline, search_spaces=param_grid, **kwargs)
     else:
         hyperparameter_search = GridSearchCV(pipeline, param_grid=param_grid, **kwargs)
 
-    with ignore_warnings(
-        category=[ConvergenceWarning, FitFailedWarning]
-    ), warnings.catch_warnings():
+    with ignore_warnings(category=[ConvergenceWarning, FitFailedWarning]), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         hyperparameter_search.fit(X, y)
 
@@ -75,6 +73,7 @@ def run_model_search(
     pipeline: Pipeline,
     task_type: str,
     output_dir: str | Path,
+    cv: int | None = 5,
     run_dir_suffix: str = "",
     additional_save_on_run: dict = {},
     refit_regression="RMSE",
@@ -88,16 +87,23 @@ def run_model_search(
     """Run hyperparameter tuning for multiple models and save the results to disk."""
     assert task_type in ["classification", "regression"], "Invalid task type."
 
+    if isinstance(param_grids, dict):
+        param_grids = [param_grids]
+
     for param_grid in param_grids:
         # Get the name of the current model being trained
         if isinstance(param_grid, list):
             model_name = param_grid[0]
+        else:
+            model_name = param_grid
         model_key = "classifier" if task_type == "classification" else "regressor__regressor"
-        model_name = model_name[model_key][0].__class__.__name__
+        model_name = model_name[model_key]
+        if isinstance(model_name, list):
+            model_name = model_name[0].__class__.__name__
+        else:
+            model_name = model_name.__class__.__name__
 
-        current_run_dir = os.path.join(
-            output_dir, f"run_{helpers.current_datetime()}_{model_name}_{run_dir_suffix}"
-        )
+        current_run_dir = os.path.join(output_dir, f"run_{helpers.current_datetime()}_{model_name}_{run_dir_suffix}")
 
         print("\t" * tabs + f"Initializing run on {current_run_dir} ({model_name}):")
 
@@ -116,9 +122,9 @@ def run_model_search(
             refit = refit_classification
             scoring = scorers.clf_scoring_metrics
         else:  # regression
-            assert (
-                refit_regression in scorers.reg_scoring_metrics
-            ), "Invalid refit metric, must be in: " + ", ".join(scorers.reg_scoring_metrics.keys())
+            assert refit_regression in scorers.reg_scoring_metrics, "Invalid refit metric, must be in: " + ", ".join(
+                scorers.reg_scoring_metrics.keys()
+            )
             refit = refit_regression
             scoring = scorers.reg_scoring_metrics
 
@@ -130,7 +136,7 @@ def run_model_search(
             param_grid=param_grid,
             use_bayes_search=use_bayes_search,
             tabs=1,
-            cv=5,
+            cv=cv,
             refit=refit,
             scoring=scoring,
             n_jobs=1 if use_cuml else -2,
@@ -352,9 +358,7 @@ def find_best_model(
         sklearn_metric_name = metric
 
     models_with_scores = []
-    for run_dir, current_run_results in helpers.get_objects_from_dirs(
-        folder_with_runs, func=load_run_results
-    ):
+    for run_dir, current_run_results in helpers.get_objects_from_dirs(folder_with_runs, func=load_run_results):
         if metric not in current_run_results["metrics"]["parsed"][on]:
             continue
 
@@ -379,9 +383,7 @@ def find_best_model(
 
     # Check if we have enough models
     if len(sorted_models) < rank:
-        raise ValueError(
-            f"Not enough models to select rank {rank}. Only {len(sorted_models)} models available."
-        )
+        raise ValueError(f"Not enough models to select rank {rank}. Only {len(sorted_models)} models available.")
 
     # Return the model at the specified rank (subtracting 1 because list indices start at 0)
     return sorted_models[rank - 1]
@@ -431,9 +433,12 @@ def load_from_run(run_folder: str | Path, filename: str, **kwargs) -> Any:
 def plot_runs(
     runs_folder: str | Path,
     metrics_to_plot: list[str],
+    sort_by: str | None = None,
     use_suffix_as_name=True,
     only_runs_with_suffix: list[str] = None,
+    only_runs_with_this_in_name: list[str] = None,
     runs_names_mapping: dict[str, str] = {},
+    map_x_axis_with_str: str | None = None,
     summary_table=True,
     rename_metrics: dict[str, str] = {},
     figsize=(6, 3),
@@ -453,11 +458,16 @@ def plot_runs(
         The folder containing the results of multiple runs.
     metrics_to_plot : list[str]
         The metrics to plot.
+    sort_by : str | None, optional
+        The metric to sort the runs by, by default None.
     use_suffix_as_name : bool, optional
         Whether to use the suffix of the run folder as the name of the run, which will appear in the
         x-axis of the plot, by default True.
     only_runs_with_suffix : list[str], optional
         If provided, only runs whose name ends with one of the strings in this list will be plotted,
+        by default None.
+    only_runs_with_this_in_name : list[str], optional
+        If provided, only runs whose name contains one of the strings in this list will be plotted,
         by default None.
     runs_names_mapping : dict[str, str], optional
         A dictionary to rename the runs, this will appear in the x-axis of the plot, by default {}.
@@ -484,18 +494,23 @@ def plot_runs(
     """
     runs_metrics = {}
     for run_dir, current_run_results in helpers.get_objects_from_dirs(
-        runs_folder, func=load_run_results, only_dirs_with_suffix=only_runs_with_suffix
+        runs_folder,
+        func=load_run_results,
+        only_dirs_with_suffix=only_runs_with_suffix,
+        only_dirs_with_this_in_name=only_runs_with_this_in_name,
     ):
         if runs_names_mapping:
             # Look the suffix in the given mapping and assign the name
             for key, value in runs_names_mapping.items():
-                if run_dir.endswith(key):
+                if run_dir.endswith(key) or run_dir[:-1].endswith(key):
                     current_run_results["name"] = value
                     break
-        
-        if use_suffix_as_name:
+
+        if use_suffix_as_name and not runs_names_mapping:
             current_run_results["name"] = run_dir.split("_")[-1]
-        
+            if current_run_results["name"] == "":
+                current_run_results["name"] = run_dir.split("_")[-2]
+
         name = current_run_results["name"]
         runs_metrics[name] = {}
         present_model_metrics = set()
@@ -516,6 +531,37 @@ def plot_runs(
 
     # Convert to DataFrame
     df = pd.DataFrame(restructured_data)
+
+    # Create a temporary DataFrame with only validation scores
+    if sort_by:
+        # First, get the validation F1-scores for each model
+        val_scores = df[df["set"] == "val"].set_index("model")[sort_by]
+
+        # Sort the models by their validation F1-score in descending order
+        sorted_models = val_scores.sort_values(ascending=False).index.tolist()
+
+        # Create a new DataFrame to store the sorted results
+        df_sorted = pd.DataFrame(columns=df.columns)
+
+        # Iterate through the sorted models
+        for model in sorted_models:
+            # Get all rows for this model (train, val, test)
+            model_rows = df[df["model"] == model]
+
+            # Sort these rows to ensure they're in order: train, val, test
+            model_rows = model_rows.sort_values(
+                by="set",
+                key=lambda x: pd.Categorical(x, categories=["train", "val", "test"], ordered=True),
+                ascending=False,
+            )
+
+            # Append these rows to the new sorted DataFrame
+            df_sorted = pd.concat([df_sorted, model_rows], ignore_index=True)
+
+        # Reset the index if needed
+        df_sorted = df_sorted.reset_index(drop=True)
+        df = df_sorted
+
     plotter = plots.MetricPlot()
     plotter.set_color_by("set")
 
@@ -526,11 +572,19 @@ def plot_runs(
         plotter.add_axis(metric, title=axis_title)
 
     # Add data for each metric
+    z = 1
+    mapping_x_axis = {}
     for metric in metrics_to_plot:
         for set_name in ["train", "val", "test"]:
             if set_name not in df["set"].unique():
                 continue
             subset = df[df["set"] == set_name]
+            if map_x_axis_with_str:
+                for model in subset["model"].unique():
+                    if model not in mapping_x_axis:
+                        mapping_x_axis[model] = map_x_axis_with_str + f"{z}"
+                        z += 1
+                subset["model"] = subset["model"].map(mapping_x_axis)
             plotter.add_data(
                 axis_name=metric,
                 x=subset["model"],
@@ -538,6 +592,10 @@ def plot_runs(
                 set_name=set_name,
                 metric_name=metric,
             )
+
+    print("Mapping used in x-axis:")
+    for key, value in mapping_x_axis.items():
+        print(f"\t{value} -> {key}")
 
     # Plot the data
     plotter.plot(
@@ -553,3 +611,166 @@ def plot_runs(
 
     if summary_table:
         return df
+
+
+def leverage_vs_studentized_residuals(
+    model,
+    X: np.ndarray,
+    y: np.ndarray,
+    residuals_cutoff=2,
+    print_summary=True,
+    plot=True,
+    plot_path=None,
+    figsize=(6, 4),
+    style="default",
+    dpi=300,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Plot leverage vs. studentized residuals plot for the given model and `X`, `y` data.
+
+    Parameters
+    ----------
+    model : object
+        The trained model object with a `predict` method.
+    X : np.ndarray
+        The feature matrix.
+    y : np.ndarray
+        The target vector.
+    residuals_cutoff : int, optional
+        The cutoff value for studentized residuals, by default 2
+    print_summary : bool, optional
+        Whether to print a summary table, by default True
+    plot : bool, optional
+        Whether to plot the leverage vs. studentized residuals plot, by default True
+    plot_path : str, optional
+        The path to save the plot (including the filename). If `None`, the plot will not be saved,
+        by default None
+    figsize : tuple, optional
+        The figure size for the plot, by default (6, 4)
+    style : str, optional
+        The plot style to use, by default PAPER_STYLE
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        A tuple containing two boolean arrays: one for found high leverage points and one for high
+        studentized residuals.
+    """
+    # Identify high leverage points (you can adjust the threshold as needed)
+    leverage = hat_matrix_diag(X)
+
+    y_pred = model.predict(X)
+    residuals = y - y_pred
+
+    # Calculate standardized residuals
+    studentized_residuals = residuals / np.std(residuals)
+
+    # Estimate the leverage threshold
+    leverage_threshold = 2 * (X.shape[1] + 1) / X.shape[0]
+    high_leverage = leverage > leverage_threshold
+
+    # Identify high studentized residuals
+    high_studentized_residuals = np.abs(studentized_residuals) > residuals_cutoff
+
+    # Points that are high leverage but not high studentized residuals
+    high_leverage_not_high_residuals = high_leverage & ~high_studentized_residuals
+
+    # Points that are high leverage and high studentized residuals
+    high_leverage_and_high_residuals = high_leverage & high_studentized_residuals
+
+    # Points that are high studentized residuals but not high leverage
+    high_residuals_not_high_leverage = high_studentized_residuals & ~high_leverage
+    if plot or plot_path is not None:
+        with plt.style.context(style):
+            fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+            # Plot normal points
+            ax.scatter(
+                leverage[~high_leverage & ~high_studentized_residuals],
+                studentized_residuals[~high_leverage & ~high_studentized_residuals],
+                alpha=0.6,
+                label="Normal points",
+                s=20,
+                c="black",
+            )
+
+            # Plot high leverage but not high residual points
+            ax.scatter(
+                leverage[high_leverage_not_high_residuals],
+                studentized_residuals[high_leverage_not_high_residuals],
+                alpha=0.6,
+                s=20,
+                c="r",
+            )
+
+            # Plot high leverage and high residual points
+            ax.scatter(
+                leverage[high_leverage_and_high_residuals],
+                studentized_residuals[high_leverage_and_high_residuals],
+                alpha=0.6,
+                s=20,
+                c="r",
+                marker="x",
+            )
+
+            # Plot high residual but not high leverage points
+            ax.scatter(
+                leverage[high_residuals_not_high_leverage],
+                studentized_residuals[high_residuals_not_high_leverage],
+                alpha=0.6,
+                s=20,
+                c="b",
+                marker="x",
+            )
+
+            # Add vertical line for leverage threshold
+            ax.axvline(
+                x=leverage_threshold,
+                color="r",
+                linestyle="-.",
+                alpha=0.5,
+                label="High Leverage cutoff",
+            )
+
+            # Add horizontal lines for studentized residuals
+            ax.axhline(
+                y=residuals_cutoff,
+                color="b",
+                linestyle="-.",
+                alpha=0.5,
+                label="High Residuals cutoff",
+            )
+            ax.axhline(y=-residuals_cutoff, color="b", linestyle="-.", alpha=0.5)
+
+            # Add a horizontal line at y=0
+            ax.axhline(y=0, color="grey", linestyle="--", alpha=0.5, linewidth=0.5)
+
+            # Add labels and title
+            ax.set_xlabel("Leverage")
+            ax.set_ylabel("Studentized Residuals")
+
+            # Add legend
+            ax.legend()
+
+            fig.tight_layout()
+
+            if plot:
+                plt.show()
+
+            if plot_path is not None:
+                ensure_directory_exists(os.path.dirname(plot_path))
+                fig.savefig(plot_path, bbox_inches="tight", dpi=dpi, format="pdf")
+                plt.close(fig)
+
+    # Summary table
+    if print_summary:
+        data = []
+        data.append(["High leverage points", high_leverage.sum()])
+        data.append(["High studentized residuals", high_studentized_residuals.sum()])
+        data.append(["High leverage & ~high residuals", high_leverage_not_high_residuals.sum()])
+        data.append(["High residuals & ~high leverage", high_residuals_not_high_leverage.sum()])
+        data.append(["Total", (high_leverage | high_studentized_residuals).sum()])
+        table = helpers.make_pretty_table(data, ["Description", "Count"])
+        table.align["Description"] = "l"
+        print(table)
+
+    return high_leverage, high_studentized_residuals
